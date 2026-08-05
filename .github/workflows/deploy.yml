@@ -28,6 +28,10 @@ jobs:
           username: ${{ secrets.ORACLE_SSH_USER }}
           key: ${{ secrets.ORACLE_SSH_DEPLOY_KEY }}
           port: 22 # change if this server uses a non-standard SSH port
+          debug: true # verbose SSH handshake output — prints connection/auth
+                      # details, never the secret values themselves (GitHub
+                      # always masks those). Safe to leave on; drop it once
+                      # this is reliably working if you'd rather trim the logs.
           script: |
             set -e
             cd "${{ secrets.ORACLE_PROJECT_PATH }}"
