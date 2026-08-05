@@ -270,10 +270,42 @@ app's own site/service is touched.
    docker compose up -d caddy   # substitute the actual service name if different
    ```
 
-5. Set `GUNICORN_BIND=127.0.0.1:<LOCAL_APP_PORT>` in lifeassistant's own
-   `.env` (see step 6) — **not** in the other app's `.env`. This makes
-   `deploy/gunicorn.conf.py` bind a host-only TCP port instead of its
-   default Unix socket, matching what the Caddyfile entry above proxies to.
+5. Set `GUNICORN_BIND=0.0.0.0:<LOCAL_APP_PORT>` in lifeassistant's own
+   `.env` (see step 6) — **not** in the other app's `.env`, and **not**
+   `127.0.0.1:<LOCAL_APP_PORT>`. This is the part that's easy to get wrong:
+   traffic from the proxy container arrives at the host via the Docker
+   bridge interface (`host.docker.internal`, e.g. `172.17.0.1`), which is
+   a *different* interface from loopback — a socket bound only to
+   `127.0.0.1` will never see it, even once the firewall (next step)
+   allows the packet through. `0.0.0.0` means "all interfaces," which is
+   exactly what's needed here — but it also means Gunicorn is now
+   reachable on the host's public interface too unless you lock that down,
+   which is exactly what step 5b does.
+
+5b. **Restrict `<LOCAL_APP_PORT>` to only the proxy's own Docker subnet**,
+   at the host firewall. Find the real subnet first — do not assume it
+   matches whatever `host.docker.internal` resolved to:
+   ```bash
+   docker network inspect <compose-project-name>_default \
+     --format '{{range .IPAM.Config}}{{println "Subnet:" .Subnet "Gateway:" .Gateway}}{{end}}'
+
+   sudo ufw status verbose   # confirm active, default deny incoming
+   ```
+   If `ufw` is active:
+   ```bash
+   sudo ufw allow from <subnet-from-above> to any port <LOCAL_APP_PORT> proto tcp
+   sudo ufw deny <LOCAL_APP_PORT>/tcp
+   sudo ufw status numbered   # confirm the allow-from-subnet rule isn't shadowed
+   ```
+   If `ufw` is inactive, check `sudo iptables -S INPUT` and
+   `sudo iptables -S DOCKER-USER` instead before deciding what's needed —
+   don't leave the port unfiltered either way.
+
+   **Never add `<LOCAL_APP_PORT>` to the Oracle Cloud VCN Security
+   List/NSG.** It must stay unreachable from the public internet at the
+   cloud-network layer too — the host firewall rule above is what makes it
+   reachable *only* to the proxy container, not a substitute for keeping
+   it off the public ingress rules.
 
 HTTPS is automatic here — the existing Caddy instance issues and renews a
 Let's Encrypt certificate for the new hostname the first time it sees a

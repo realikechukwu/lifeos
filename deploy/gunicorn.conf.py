@@ -17,11 +17,15 @@ import os
 #
 # If this box already has another app's reverse proxy (e.g. Caddy in
 # Docker) owning ports 80/443 ("Path B"), that proxy container can't reach
-# a Unix socket on the host by default — set GUNICORN_BIND=127.0.0.1:<port>
-# in lifeassistant's .env instead, matching the port used in
-# deploy/caddy/lifeassistant-site.Caddyfile.example. Still host-only, never
-# exposed on the public network directly — the shared proxy is still what's
-# actually reachable from outside.
+# a Unix socket on the host by default — set GUNICORN_BIND=0.0.0.0:<port>
+# in lifeassistant's .env instead (NOT 127.0.0.1 — traffic from the proxy
+# container arrives via the Docker bridge interface, not loopback, so a
+# loopback-only bind is invisible to it), matching the port used in
+# deploy/caddy/lifeassistant-site.Caddyfile.example. Binding 0.0.0.0 does
+# expose this port on every host interface including the public one — that
+# MUST be locked down with a host firewall rule scoping it to the proxy's
+# own Docker subnet (DEPLOY_ORACLE.md step 13, Path B, item 5b). Never add
+# this port to your cloud provider's public ingress rules.
 bind = os.environ.get("GUNICORN_BIND", "unix:/run/lifeassistant/gunicorn.sock")
 
 # A small family app: 2-4 workers is plenty. (2 x CPU) + 1 is the usual

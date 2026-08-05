@@ -6,13 +6,20 @@
 # Fill in:
 #   <YOUR_DOMAIN>      — e.g. lifeos.example.com — must already have a DNS
 #                         A record pointing at this server's public IP.
-#   <LOCAL_APP_PORT>    — must match GUNICORN_BIND=127.0.0.1:<LOCAL_APP_PORT>
-#                         in lifeassistant's own .env.
+#   <LOCAL_APP_PORT>    — must match GUNICORN_BIND=0.0.0.0:<LOCAL_APP_PORT>
+#                         in lifeassistant's own .env (0.0.0.0, not
+#                         127.0.0.1 — see DEPLOY_ORACLE.md step 13, Path B,
+#                         item 5 for why).
 #
 # Requires the existing reverse-proxy service to have this added to its
 # compose.yaml (see DEPLOY_ORACLE.md step 13, Path B, item 2):
 #   extra_hosts:
 #     - "host.docker.internal:host-gateway"
+#
+# Also requires a host firewall rule restricting <LOCAL_APP_PORT> to only
+# this proxy's own Docker subnet (DEPLOY_ORACLE.md step 13, Path B, item
+# 5b) — 0.0.0.0 binds are reachable on every host interface otherwise,
+# including the public one.
 
 <YOUR_DOMAIN> {
     encode zstd gzip
