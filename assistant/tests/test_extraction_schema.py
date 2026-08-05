@@ -4,7 +4,7 @@ from pathlib import Path
 from django.test import SimpleTestCase
 from pydantic import ValidationError
 
-from assistant.services.extractor import AppointmentExtraction, build_messages
+from assistant.services.extractor import AssistantAction, build_messages
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -13,9 +13,9 @@ def load_fixture(name: str) -> str:
     return (FIXTURES_DIR / name).read_text()
 
 
-class AppointmentExtractionSchemaTests(SimpleTestCase):
+class AssistantActionSchemaTests(SimpleTestCase):
     def test_valid_extraction_passes_validation(self):
-        extraction = AppointmentExtraction(
+        extraction = AssistantAction(
             action_type="create_calendar_event",
             title="Dental appointment",
             appointment_date="2026-08-18",
@@ -27,15 +27,32 @@ class AppointmentExtractionSchemaTests(SimpleTestCase):
 
     def test_invalid_action_type_is_rejected(self):
         with self.assertRaises(ValidationError):
-            AppointmentExtraction(action_type="delete_all_events", confidence=0.9)
+            AssistantAction(action_type="delete_all_events", confidence=0.9)
 
     def test_confidence_out_of_range_is_rejected(self):
         with self.assertRaises(ValidationError):
-            AppointmentExtraction(action_type="requires_review", confidence=1.5)
+            AssistantAction(action_type="requires_review", confidence=1.5)
 
     def test_confidence_is_required(self):
         with self.assertRaises(ValidationError):
-            AppointmentExtraction(action_type="requires_review")
+            AssistantAction(action_type="requires_review")
+
+    def test_task_action_with_unassigned_default(self):
+        extraction = AssistantAction(
+            action_type="create_task",
+            title="Renew home insurance",
+            due_date="2026-09-30",
+            confidence=0.9,
+        )
+        self.assertIsNone(extraction.assigned_to)
+
+    def test_reminder_recipient_is_restricted_to_closed_values(self):
+        with self.assertRaises(ValidationError):
+            AssistantAction(
+                action_type="create_email_reminder",
+                reminder_recipient="attacker@evil.example.com",
+                confidence=0.9,
+            )
 
 
 class PromptInjectionRemainsUntrustedTests(SimpleTestCase):

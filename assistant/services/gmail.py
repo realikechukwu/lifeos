@@ -133,3 +133,24 @@ class GmailService:
 
         sent = self._service.users().messages().send(userId="me", body=body).execute()
         return sent.get("id", "")
+
+    def send_message(
+        self,
+        *,
+        to_addr: str,
+        subject: str,
+        body_text: str,
+        message_id_header: str | None = None,
+    ) -> str:
+        """Send a fresh (non-reply) plain-text message — used for reminder
+        notifications, which are not part of any existing thread. `to_addr`
+        may be a comma-separated list for a "both" recipient."""
+        message = MIMEText(body_text)
+        message["To"] = to_addr
+        message["Subject"] = subject
+        if message_id_header:
+            message["Message-ID"] = message_id_header
+
+        raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
+        sent = self._service.users().messages().send(userId="me", body={"raw": raw}).execute()
+        return sent.get("id", "")

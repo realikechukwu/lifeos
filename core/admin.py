@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from django.contrib import admin
 from django.utils import timezone
 
@@ -7,8 +9,13 @@ from .models import (
     GoogleCredential,
     HouseholdMember,
     IncomingEmail,
+    Note,
     ParsedAction,
+    Reminder,
+    Task,
 )
+
+STALE_PROCESSING_MINUTES = 15
 
 
 @admin.register(HouseholdMember)
@@ -70,6 +77,33 @@ class CalendarEventRecordInline(admin.TabularInline):
     can_delete = False
 
 
+class TaskInline(admin.TabularInline):
+    model = Task
+    fk_name = "source_parsed_action"
+    extra = 0
+    fields = ("title", "assigned_to", "status", "due_date")
+    readonly_fields = ("title", "assigned_to", "status", "due_date")
+    can_delete = False
+
+
+class NoteInline(admin.TabularInline):
+    model = Note
+    fk_name = "source_parsed_action"
+    extra = 0
+    fields = ("title", "category")
+    readonly_fields = ("title", "category")
+    can_delete = False
+
+
+class ReminderInline(admin.TabularInline):
+    model = Reminder
+    fk_name = "source_parsed_action"
+    extra = 0
+    fields = ("title", "recipient", "reminder_date", "reminder_time", "status")
+    readonly_fields = ("title", "recipient", "reminder_date", "reminder_time", "status")
+    can_delete = False
+
+
 @admin.register(ParsedAction)
 class ParsedActionAdmin(admin.ModelAdmin):
     list_display = (
@@ -77,13 +111,17 @@ class ParsedActionAdmin(admin.ModelAdmin):
         "action_type",
         "status",
         "appointment_date",
-        "start_time",
+        "due_date",
+        "reminder_date",
         "confidence",
         "incoming_email_link",
         "updated_at",
     )
     list_filter = ("action_type", "status", "all_day")
-    search_fields = ("title", "location", "booking_reference", "incoming_email__subject")
+    search_fields = (
+        "title", "location", "booking_reference", "task_search_text",
+        "incoming_email__subject",
+    )
     readonly_fields = (
         "incoming_email",
         "extracted_data",
@@ -102,6 +140,8 @@ class ParsedActionAdmin(admin.ModelAdmin):
         "action_type",
         "status",
         "title",
+        "description",
+        # Calendar
         "appointment_date",
         "start_time",
         "end_time",
@@ -110,6 +150,18 @@ class ParsedActionAdmin(admin.ModelAdmin):
         "meeting_url",
         "organiser",
         "booking_reference",
+        # Task
+        "due_date",
+        "due_time",
+        "assigned_to",
+        "task_search_text",
+        # Note
+        "note_category",
+        # Reminder
+        "reminder_date",
+        "reminder_time",
+        "reminder_recipient",
+        "reminder_lead_days",
         "related_household_member",
         "confidence",
         "missing_fields",
@@ -124,17 +176,18 @@ class ParsedActionAdmin(admin.ModelAdmin):
         "created_at",
         "updated_at",
     )
-    inlines = [CalendarEventRecordInline]
-    actions = ["approve_and_create_event", "reject_selected_actions", "retry_selected_actions"]
+    inlines = [CalendarEventRecordInline, TaskInline, NoteInline, ReminderInline]
+    actions = ["approve_pending_actions", "reject_selected_actions", "retry_selected_actions"]
 
     @admin.display(description="Incoming email")
     def incoming_email_link(self, obj):
         return str(obj.incoming_email)
 
-    @admin.action(description="Approve and create calendar event")
-    def approve_and_create_event(self, request, queryset):
-        # Delegate to the same validated service used by automatic processing.
-        from assistant.services.google_calendar import create_event_for_parsed_action
+    @admin.action(description="Approve pending parsed actions (create/complete via the normal service)")
+    def approve_pending_actions(self, request, queryset):
+        # Delegate to the same dispatch used by automatic processing — no
+        # duplicated business logic in the admin.
+        from assistant.services.router import admin_approve_and_execute
 
         created, deferred, failed = 0, 0, 0
         for action in queryset:
@@ -142,7 +195,7 @@ class ParsedActionAdmin(admin.ModelAdmin):
             action.reviewed_at = timezone.now()
             action.save(update_fields=["reviewed_by", "reviewed_at"])
             try:
-                record = create_event_for_parsed_action(action)
+                outcome, _extra = admin_approve_and_execute(action)
             except Exception as exc:  # noqa: BLE001 - surface to admin, don't crash the request
                 action.status = ParsedAction.Status.FAILED
                 action.failure_reason = str(exc)
@@ -150,12 +203,12 @@ class ParsedActionAdmin(admin.ModelAdmin):
                 failed += 1
                 continue
             action.refresh_from_db()
-            if record is not None and action.status == ParsedAction.Status.EXECUTED:
-                created += 1
+            if outcome in ("pending_review", "task_ambiguous"):
+                deferred += 1
             else:
-                deferred += 1  # exact duplicate or possible reschedule; see status/failure_reason
+                created += 1
         self.message_user(
-            request, f"Created {created} event(s). {deferred} deferred (duplicate/reschedule). {failed} failed."
+            request, f"Executed {created} action(s). {deferred} deferred/still ambiguous. {failed} failed."
         )
 
     @admin.action(description="Reject selected actions")
@@ -203,6 +256,192 @@ class CalendarEventRecordAdmin(admin.ModelAdmin):
     @admin.display(description="Parsed action")
     def parsed_action_link(self, obj):
         return str(obj.parsed_action)
+
+
+@admin.register(Task)
+class TaskAdmin(admin.ModelAdmin):
+    list_display = (
+        "title",
+        "assigned_to",
+        "status",
+        "priority",
+        "due_date",
+        "due_time",
+        "created_by_link",
+        "updated_at",
+    )
+    list_filter = ("status", "priority", "assigned_to")
+    search_fields = ("title", "description")
+    date_hierarchy = "due_date"
+    readonly_fields = (
+        "source_email",
+        "source_parsed_action",
+        "created_by",
+        "completed_at",
+        "created_at",
+        "updated_at",
+    )
+    fields = (
+        "title",
+        "description",
+        "assigned_to",
+        "status",
+        "priority",
+        "due_date",
+        "due_time",
+        "source_email",
+        "source_parsed_action",
+        "created_by",
+        "completed_at",
+        "created_at",
+        "updated_at",
+    )
+    actions = ["mark_selected_tasks_complete"]
+
+    @admin.display(description="Created by")
+    def created_by_link(self, obj):
+        return str(obj.created_by) if obj.created_by else "—"
+
+    @admin.action(description="Mark selected tasks complete")
+    def mark_selected_tasks_complete(self, request, queryset):
+        from assistant.services.tasks import complete_task
+
+        completed, skipped = 0, 0
+        for task in queryset:
+            if task.status == Task.Status.COMPLETED:
+                skipped += 1
+                continue
+            complete_task(task)
+            completed += 1
+        self.message_user(request, f"Marked {completed} task(s) complete. Skipped {skipped} already complete.")
+
+
+@admin.register(Note)
+class NoteAdmin(admin.ModelAdmin):
+    list_display = ("title", "category", "related_household_member", "source_email_link", "created_at")
+    list_filter = ("category",)
+    search_fields = ("title", "body")
+    date_hierarchy = "created_at"
+    readonly_fields = ("source_email", "source_parsed_action", "created_at", "updated_at")
+    fields = (
+        "title",
+        "body",
+        "category",
+        "related_household_member",
+        "source_email",
+        "source_parsed_action",
+        "created_at",
+        "updated_at",
+    )
+
+    @admin.display(description="Source email")
+    def source_email_link(self, obj):
+        return str(obj.source_email) if obj.source_email else "—"
+
+
+@admin.register(Reminder)
+class ReminderAdmin(admin.ModelAdmin):
+    list_display = (
+        "title",
+        "recipient",
+        "reminder_date",
+        "reminder_time",
+        "status",
+        "is_stale_processing",
+        "delivery_attempts",
+        "claimed_at",
+        "sent_at",
+    )
+    list_filter = ("status", "recipient")
+    search_fields = ("title", "message", "send_key", "rfc_message_id")
+    date_hierarchy = "reminder_date"
+    readonly_fields = (
+        "source_email",
+        "source_parsed_action",
+        "related_task",
+        "related_calendar_event",
+        "send_key",
+        "rfc_message_id",
+        "claimed_at",
+        "sent_at",
+        "last_error",
+        "delivery_attempts",
+        "created_at",
+        "updated_at",
+    )
+    fields = (
+        "title",
+        "message",
+        "recipient",
+        "reminder_date",
+        "reminder_time",
+        "timezone",
+        "status",
+        "related_task",
+        "related_calendar_event",
+        "source_email",
+        "source_parsed_action",
+        "send_key",
+        "rfc_message_id",
+        "claimed_at",
+        "sent_at",
+        "last_error",
+        "delivery_attempts",
+        "created_at",
+        "updated_at",
+    )
+    actions = [
+        "cancel_selected_reminders",
+        "reset_stale_processing_reminders",
+        "retry_selected_failed_reminders",
+    ]
+
+    @admin.display(description="Stale?", boolean=True)
+    def is_stale_processing(self, obj):
+        if obj.status != Reminder.Status.PROCESSING or not obj.claimed_at:
+            return False
+        return (timezone.now() - obj.claimed_at).total_seconds() > STALE_PROCESSING_MINUTES * 60
+
+    @admin.action(description="Cancel selected reminders")
+    def cancel_selected_reminders(self, request, queryset):
+        updated = queryset.exclude(status__in=[Reminder.Status.SENT, Reminder.Status.CANCELLED]).update(
+            status=Reminder.Status.CANCELLED
+        )
+        for reminder_id in queryset.values_list("id", flat=True):
+            AuditLog.objects.create(
+                action="reminder_cancelled", object_type="Reminder", object_id=str(reminder_id), success=True,
+            )
+        self.message_user(request, f"Cancelled {updated} reminder(s).")
+
+    @admin.action(description="Reset stale processing reminders to pending (manual retry)")
+    def reset_stale_processing_reminders(self, request, queryset):
+        cutoff = timezone.now() - timedelta(minutes=STALE_PROCESSING_MINUTES)
+        stale = queryset.filter(status=Reminder.Status.PROCESSING, claimed_at__lt=cutoff)
+        reset_count = 0
+        for reminder in stale:
+            reminder.status = Reminder.Status.PENDING
+            reminder.claimed_at = None
+            reminder.send_key = None
+            reminder.rfc_message_id = ""
+            reminder.save(update_fields=["status", "claimed_at", "send_key", "rfc_message_id", "updated_at"])
+            AuditLog.objects.create(
+                action="reminder_reset_stale", object_type="Reminder", object_id=str(reminder.id), success=True,
+            )
+            reset_count += 1
+        self.message_user(request, f"Reset {reset_count} stale processing reminder(s) to pending.")
+
+    @admin.action(description="Retry selected failed reminders")
+    def retry_selected_failed_reminders(self, request, queryset):
+        failed = queryset.filter(status=Reminder.Status.FAILED)
+        retried = 0
+        for reminder in failed:
+            reminder.status = Reminder.Status.PENDING
+            reminder.save(update_fields=["status", "updated_at"])
+            AuditLog.objects.create(
+                action="reminder_retry_requested", object_type="Reminder", object_id=str(reminder.id), success=True,
+            )
+            retried += 1
+        self.message_user(request, f"Reset {retried} failed reminder(s) to pending for retry.")
 
 
 @admin.register(AuditLog)

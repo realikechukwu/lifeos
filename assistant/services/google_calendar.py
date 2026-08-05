@@ -122,9 +122,9 @@ def passes_auto_create_gate(parsed_action: ParsedAction) -> tuple[bool, list[str
 def create_event_for_parsed_action(parsed_action: ParsedAction) -> CalendarEventRecord | None:
     """Single source of truth for turning a ParsedAction into a Google
     Calendar event. Used by both the automatic pipeline (after
-    passes_auto_create_gate) and the admin 'approve_and_create_event' action
-    (after human review/correction) — no event-creation logic is duplicated
-    elsewhere.
+    passes_auto_create_gate, via assistant.services.router) and the admin
+    'Approve pending parsed actions' action (after human review/correction)
+    — no event-creation logic is duplicated elsewhere.
 
     Returns the created (or pre-existing, for an exact duplicate)
     CalendarEventRecord, or None if this was a possible-reschedule case

@@ -15,6 +15,26 @@ def normalise_email(value: str) -> str:
     return value.strip().lower()
 
 
+class AssignedTo(models.TextChoices):
+    """Who a Task (or a note's related person) belongs to. Deliberately a
+    closed set resolved only from authorised household members/env vars —
+    never an arbitrary name or email pulled from email content."""
+
+    IKE = "ike", "Ike"
+    WIFE = "wife", "Wife"
+    BOTH = "both", "Both"
+    UNASSIGNED = "unassigned", "Unassigned"
+
+
+class RecipientTarget(models.TextChoices):
+    """Who a Reminder email goes to. Resolved only via AUTHORISED_EMAIL_IKE /
+    AUTHORISED_EMAIL_WIFE — never an address extracted from email text."""
+
+    IKE = "ike", "Ike"
+    WIFE = "wife", "Wife"
+    BOTH = "both", "Both"
+
+
 class HouseholdMember(models.Model):
     class Role(models.TextChoices):
         IKE = "ike", "Ike"
@@ -86,6 +106,10 @@ class IncomingEmail(models.Model):
 class ParsedAction(models.Model):
     class ActionType(models.TextChoices):
         CREATE_CALENDAR_EVENT = "create_calendar_event", "Create calendar event"
+        CREATE_TASK = "create_task", "Create task"
+        CREATE_NOTE = "create_note", "Create note"
+        CREATE_EMAIL_REMINDER = "create_email_reminder", "Create email reminder"
+        MARK_TASK_COMPLETE = "mark_task_complete", "Mark task complete"
         REQUIRES_REVIEW = "requires_review", "Requires review"
         UNSUPPORTED = "unsupported", "Unsupported"
 
@@ -105,6 +129,8 @@ class ParsedAction(models.Model):
     extracted_data = models.JSONField(default=dict, blank=True)
 
     title = models.CharField(max_length=255, blank=True, default="")
+    description = models.TextField(blank=True, default="")
+
     appointment_date = models.DateField(null=True, blank=True)
     start_time = models.TimeField(null=True, blank=True)
     end_time = models.TimeField(null=True, blank=True)
@@ -114,6 +140,28 @@ class ParsedAction(models.Model):
     meeting_url = models.URLField(max_length=1000, blank=True, default="")
     organiser = models.CharField(max_length=255, blank=True, default="")
     booking_reference = models.CharField(max_length=255, blank=True, default="")
+
+    # Phase 2: tasks
+    due_date = models.DateField(null=True, blank=True)
+    due_time = models.TimeField(null=True, blank=True)
+    assigned_to = models.CharField(max_length=20, choices=AssignedTo.choices, blank=True, default="")
+    task_search_text = models.CharField(
+        max_length=500, blank=True, default="",
+        help_text="Free text used to look up an existing task for mark_task_complete.",
+    )
+
+    # Phase 2: notes
+    note_category = models.CharField(max_length=100, blank=True, default="")
+
+    # Phase 2: reminders (standalone, or linked to a create_calendar_event action)
+    reminder_date = models.DateField(null=True, blank=True)
+    reminder_time = models.TimeField(null=True, blank=True)
+    reminder_recipient = models.CharField(max_length=10, choices=RecipientTarget.choices, blank=True, default="")
+    reminder_lead_days = models.PositiveIntegerField(
+        null=True, blank=True,
+        help_text="Set only when the user said something like 'the day before the event'. "
+        "The actual reminder date is always computed in Python from the validated event date, never trusted from the model.",
+    )
 
     related_household_member = models.ForeignKey(
         HouseholdMember, on_delete=models.SET_NULL, null=True, blank=True, related_name="parsed_actions"
@@ -173,6 +221,127 @@ class CalendarEventRecord(models.Model):
 
     def __str__(self):
         return f"{self.title} on {self.appointment_date}"
+
+
+class Task(models.Model):
+    class Status(models.TextChoices):
+        OPEN = "open", "Open"
+        IN_PROGRESS = "in_progress", "In progress"
+        COMPLETED = "completed", "Completed"
+        CANCELLED = "cancelled", "Cancelled"
+
+    class Priority(models.TextChoices):
+        LOW = "low", "Low"
+        NORMAL = "normal", "Normal"
+        HIGH = "high", "High"
+
+    title = models.CharField(max_length=255)
+    description = models.TextField(blank=True, default="")
+
+    assigned_to = models.CharField(max_length=20, choices=AssignedTo.choices, default=AssignedTo.UNASSIGNED)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.OPEN)
+    priority = models.CharField(max_length=10, choices=Priority.choices, default=Priority.NORMAL)
+
+    due_date = models.DateField(null=True, blank=True)
+    due_time = models.TimeField(null=True, blank=True)
+
+    source_email = models.ForeignKey(
+        IncomingEmail, on_delete=models.SET_NULL, null=True, blank=True, related_name="tasks"
+    )
+    source_parsed_action = models.ForeignKey(
+        ParsedAction, on_delete=models.SET_NULL, null=True, blank=True, related_name="tasks"
+    )
+    created_by = models.ForeignKey(
+        HouseholdMember, on_delete=models.SET_NULL, null=True, blank=True, related_name="created_tasks"
+    )
+
+    completed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.title} ({self.get_status_display()})"
+
+
+class Note(models.Model):
+    title = models.CharField(max_length=255, blank=True, default="")
+    body = models.TextField(blank=True, default="")
+    category = models.CharField(max_length=100, blank=True, default="")
+
+    related_household_member = models.ForeignKey(
+        HouseholdMember, on_delete=models.SET_NULL, null=True, blank=True, related_name="notes"
+    )
+    source_email = models.ForeignKey(
+        IncomingEmail, on_delete=models.SET_NULL, null=True, blank=True, related_name="notes"
+    )
+    source_parsed_action = models.ForeignKey(
+        ParsedAction, on_delete=models.SET_NULL, null=True, blank=True, related_name="notes"
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return self.title or (self.body[:50] if self.body else "(empty note)")
+
+
+class Reminder(models.Model):
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        PROCESSING = "processing", "Processing"
+        SENT = "sent", "Sent"
+        FAILED = "failed", "Failed"
+        CANCELLED = "cancelled", "Cancelled"
+
+    title = models.CharField(max_length=255)
+    message = models.TextField(blank=True, default="")
+    recipient = models.CharField(max_length=10, choices=RecipientTarget.choices)
+
+    reminder_date = models.DateField()
+    reminder_time = models.TimeField()
+    timezone = models.CharField(max_length=64, default="Europe/London")
+
+    related_task = models.ForeignKey(
+        Task, on_delete=models.SET_NULL, null=True, blank=True, related_name="reminders"
+    )
+    related_calendar_event = models.ForeignKey(
+        CalendarEventRecord, on_delete=models.SET_NULL, null=True, blank=True, related_name="reminders"
+    )
+
+    source_email = models.ForeignKey(
+        IncomingEmail, on_delete=models.SET_NULL, null=True, blank=True, related_name="reminders"
+    )
+    source_parsed_action = models.ForeignKey(
+        ParsedAction, on_delete=models.SET_NULL, null=True, blank=True, related_name="reminders"
+    )
+
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+
+    # Generated only when send_due_reminders claims the reminder (pending ->
+    # processing), not at creation time. Nullable so many pending rows can
+    # coexist without violating uniqueness.
+    send_key = models.CharField(max_length=64, unique=True, null=True, blank=True, db_index=True)
+    rfc_message_id = models.CharField(max_length=255, blank=True, default="")
+
+    claimed_at = models.DateTimeField(null=True, blank=True)
+    sent_at = models.DateTimeField(null=True, blank=True)
+    last_error = models.TextField(blank=True, default="")
+    delivery_attempts = models.PositiveIntegerField(default=0)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["reminder_date", "reminder_time"]
+
+    def __str__(self):
+        return f'"{self.title}" -> {self.recipient} on {self.reminder_date} {self.reminder_time}'
 
 
 class AuditLog(models.Model):
