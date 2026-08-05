@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}{% if mode == "edit" %}Edit task{% else %}New task{% endif %} — Family Assistant{% endblock %}
+{% block content %}
+<h1 class="h3 mb-3">{% if mode == "edit" %}Edit task{% else %}New task{% endif %}</h1>
+
+<form method="post" class="col-lg-6">
+  {% csrf_token %}
+  {% for field in form %}
+    <div class="mb-3">
+      <label class="form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+      {{ field }}
+      {% if field.errors %}<div class="text-danger small">{{ field.errors|join:", " }}</div>{% endif %}
+      {% if field.help_text %}<div class="form-text">{{ field.help_text }}</div>{% endif %}
+    </div>
+  {% endfor %}
+  <button type="submit" class="btn btn-primary">Save</button>
+  <a href="{% url 'web:task_list' %}" class="btn btn-link">Cancel</a>
+</form>
+{% endblock %}

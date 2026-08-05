@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+#
+# Example, conservative "update the running app" sequence. Copy this file to
+# something like update.sh, fill in the placeholders below, `chmod +x` it,
+# and run it by hand (or from an SSH session) whenever you want to deploy a
+# new commit. It is NOT installed or scheduled automatically, and this
+# session does not run it for you.
+#
+# It deliberately does NOT:
+#   - touch .env
+#   - run any destructive database command (no flush/reset/dropdb)
+#   - force-push or reset git history
+#   - install or (re)start systemd units it doesn't already know about
+#
+# Stops immediately on any error (set -e) so a failed step never leaves the
+# service silently half-updated.
+
+set -euo pipefail
+
+# --- Fill these in for your server, then remove this guard -----------------
+echo "Edit deploy/update.sh.example, fill in the paths below, and remove this line." >&2
+exit 1
+
+PROJECT_PATH="<PROJECT_PATH>"          # e.g. /home/lifeassistant/lifeos
+VENV_PATH="<VENV_PATH>"                # e.g. /home/lifeassistant/lifeos/.venv
+GIT_BRANCH="main"                      # branch to deploy
+HEALTH_URL="http://127.0.0.1/health/"  # adjust if Nginx/DNS differ locally
+WEB_SERVICE="lifeassistant-web"
+
+# -----------------------------------------------------------------------------
+
+cd "$PROJECT_PATH"
+
+echo "==> Fetching and checking out ${GIT_BRANCH}..."
+git fetch origin
+git checkout "$GIT_BRANCH"
+git pull --ff-only origin "$GIT_BRANCH"
+
+echo "==> Activating virtualenv..."
+# shellcheck disable=SC1091
+source "${VENV_PATH}/bin/activate"
+
+echo "==> Installing requirements..."
+pip install -r requirements.txt
+
+echo "==> Running migrations..."
+python manage.py migrate --noinput
+
+echo "==> Collecting static files..."
+python manage.py collectstatic --noinput
+
+echo "==> Restarting ${WEB_SERVICE}..."
+sudo systemctl restart "${WEB_SERVICE}"
+
+echo "==> Waiting for the app to come back up..."
+sleep 2
+
+echo "==> Checking ${HEALTH_URL}..."
+if curl -fsS "$HEALTH_URL" | grep -q '"status": "ok"'; then
+    echo "==> Deploy succeeded — /health/ reports ok."
+else
+    echo "==> WARNING: /health/ did not report ok. Check: sudo journalctl -u ${WEB_SERVICE} -n 100" >&2
+    exit 1
+fi

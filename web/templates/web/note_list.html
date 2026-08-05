@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Notes — Family Assistant{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h1 class="h3 mb-0">Notes</h1>
+  <a href="{% url 'web:note_create' %}" class="btn btn-primary btn-sm">+ New note</a>
+</div>
+
+<form method="get" class="row row-cols-lg-auto g-2 align-items-center mb-3">
+  <div class="col-12">
+    <input type="text" name="q" class="form-control form-control-sm" placeholder="Search title/body" value="{{ current_q }}">
+  </div>
+  <div class="col-12">
+    <select name="category" class="form-select form-select-sm">
+      <option value="">Any category</option>
+      {% for cat in categories %}
+        <option value="{{ cat }}" {% if cat == current_category %}selected{% endif %}>{{ cat }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="col-12">
+    <button type="submit" class="btn btn-outline-secondary btn-sm">Filter</button>
+    <a href="{% url 'web:note_list' %}" class="btn btn-link btn-sm">Reset</a>
+  </div>
+</form>
+
+{% if not notes %}
+  <div class="alert alert-secondary">No notes match these filters.</div>
+{% else %}
+<div class="row row-cols-1 row-cols-md-2 g-3">
+  {% for note in notes %}
+  <div class="col">
+    <div class="card h-100">
+      <div class="card-body">
+        <h2 class="h6"><a href="{% url 'web:note_detail' note.id %}">{{ note.title|default:"(untitled)" }}</a></h2>
+        {% if note.category %}<span class="badge bg-secondary">{{ note.category }}</span>{% endif %}
+        <p class="card-text small mt-2">{{ note.body|truncatewords:30 }}</p>
+        <p class="text-muted small mb-0">{{ note.created_at|date:"d M Y" }}{% if note.related_household_member %} · {{ note.related_household_member.name }}{% endif %}</p>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+{% endblock %}

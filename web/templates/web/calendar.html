@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}Calendar — Family Assistant{% endblock %}
+{% block extra_head %}
+<script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.15/index.global.min.js"></script>
+{% endblock %}
+{% block content %}
+<h1 class="h3 mb-3">Calendar</h1>
+<p class="text-muted">
+  <span class="badge" style="background:#2563eb;">&nbsp;</span> Calendar events
+  &nbsp;<span class="badge" style="background:#f59e0b;">&nbsp;</span> Task due dates
+  &nbsp;<span class="badge" style="background:#dc2626;">&nbsp;</span> Overdue task due dates
+  &nbsp;<span class="badge" style="background:#16a34a;">&nbsp;</span> Reminders
+</p>
+
+<div id="fullcalendar-root"></div>
+
+<!-- Event detail modal -->
+<div class="modal fade" id="eventDetailModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="eventDetailTitle">Event</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <dl class="row mb-0">
+          <dt class="col-4">Type</dt><dd class="col-8" id="eventDetailType"></dd>
+          <dt class="col-4">When</dt><dd class="col-8" id="eventDetailWhen"></dd>
+          <dt class="col-4">Status</dt><dd class="col-8" id="eventDetailStatus"></dd>
+          <dt class="col-4">Assignee</dt><dd class="col-8" id="eventDetailAssignee"></dd>
+          <dt class="col-4">Location</dt><dd class="col-8" id="eventDetailLocation"></dd>
+        </dl>
+      </div>
+      <div class="modal-footer">
+        <a href="#" id="eventDetailGoogleLink" target="_blank" rel="noopener" class="btn btn-outline-primary btn-sm d-none">
+          Open in Google Calendar
+        </a>
+        <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  var calendarEl = document.getElementById("fullcalendar-root");
+  var modalEl = document.getElementById("eventDetailModal");
+  var modal = new bootstrap.Modal(modalEl);
+
+  var calendar = new FullCalendar.Calendar(calendarEl, {
+    timeZone: "Europe/London",
+    headerToolbar: {
+      left: "prev,next today",
+      center: "title",
+      right: "dayGridMonth,timeGridWeek,listMonth",
+    },
+    initialView: "dayGridMonth",
+    height: "auto",
+    events: "{% url 'web:calendar_events_json' %}",
+    eventClick: function (info) {
+      info.jsEvent.preventDefault();
+      var props = info.event.extendedProps;
+      document.getElementById("eventDetailTitle").textContent = info.event.title;
+      document.getElementById("eventDetailType").textContent = props.type || "";
+      document.getElementById("eventDetailStatus").textContent = props.status || "";
+      document.getElementById("eventDetailAssignee").textContent = props.assignee || "—";
+      document.getElementById("eventDetailLocation").textContent = props.location || "—";
+
+      var whenText = info.event.allDay
+        ? info.event.start.toLocaleDateString("en-GB", { weekday: "short", day: "2-digit", month: "short", year: "numeric" }) + " (all day)"
+        : info.event.start.toLocaleString("en-GB", { weekday: "short", day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+      document.getElementById("eventDetailWhen").textContent = whenText;
+
+      var googleLink = document.getElementById("eventDetailGoogleLink");
+      if (props.googleUrl) {
+        googleLink.href = props.googleUrl;
+        googleLink.classList.remove("d-none");
+      } else {
+        googleLink.classList.add("d-none");
+      }
+      modal.show();
+    },
+  });
+  calendar.render();
+});
+</script>
+{% endblock %}

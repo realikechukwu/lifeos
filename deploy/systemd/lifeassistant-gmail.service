@@ -1,0 +1,25 @@
+[Unit]
+Description=Family Assistant — poll Gmail (triggered by lifeassistant-gmail.timer)
+After=network.target
+# Systemd will not start a second instance of the same (non-templated)
+# service unit while one is still running — the timer firing again during a
+# slow run is simply a no-op, which is what prevents overlapping polls here.
+# poll_gmail itself is also idempotent (see assistant/management/commands/
+# poll_gmail.py), so a run that *does* overlap or gets interrupted is still
+# safe to repeat.
+
+[Service]
+Type=oneshot
+User=<LINUX_USERNAME>
+Group=<LINUX_USERNAME>
+WorkingDirectory=<PROJECT_PATH>
+EnvironmentFile=<ENV_FILE_PATH>
+Environment=DJANGO_SETTINGS_MODULE=config.settings.production
+ExecStart=<VENV_PATH>/bin/python manage.py poll_gmail
+
+# Belt-and-braces: hard-cap a single run so a hung network call can never
+# block the *next* scheduled run indefinitely.
+TimeoutStartSec=120
+
+NoNewPrivileges=true
+PrivateTmp=true

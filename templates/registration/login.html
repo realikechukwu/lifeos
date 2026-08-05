@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Log in — Family Assistant{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-md-5 col-lg-4">
+    <div class="card mt-5">
+      <div class="card-body">
+        <h1 class="h4 mb-3 text-center">Family Assistant</h1>
+        {% if form.errors %}
+          <div class="alert alert-danger">Incorrect username or password, or the account is inactive.</div>
+        {% endif %}
+        <form method="post">
+          {% csrf_token %}
+          <div class="mb-3">
+            <label class="form-label" for="id_username">Username</label>
+            <input type="text" name="username" class="form-control" id="id_username"
+                   value="{{ form.username.value|default:'' }}" autofocus required>
+          </div>
+          <div class="mb-3">
+            <label class="form-label" for="id_password">Password</label>
+            <input type="password" name="password" class="form-control" id="id_password" required>
+          </div>
+          <input type="hidden" name="next" value="{{ next }}">
+          <button type="submit" class="btn btn-primary w-100">Log in</button>
+        </form>
+        <p class="text-muted small mt-3 mb-0">
+          Accounts are created by an administrator — there is no self-service sign-up.
+        </p>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

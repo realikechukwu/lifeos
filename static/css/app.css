@@ -1,0 +1,40 @@
+/* Small, deliberately minimal overrides on top of Bootstrap. */
+
+body {
+  background-color: #f8f9fa;
+}
+
+.card {
+  margin-bottom: 1rem;
+}
+
+.feed-item {
+  border-left: 4px solid #6c757d;
+  padding: 0.5rem 0.75rem;
+  margin-bottom: 0.5rem;
+  background: #fff;
+  border-radius: 0.25rem;
+}
+
+.feed-item.kind-calendar_event { border-left-color: #2563eb; }
+.feed-item.kind-task_due { border-left-color: #f59e0b; }
+.feed-item.kind-task_overdue { border-left-color: #dc2626; }
+.feed-item.kind-reminder { border-left-color: #16a34a; }
+.feed-item.kind-review { border-left-color: #9333ea; }
+
+.feed-item .kind-label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #6c757d;
+}
+
+#fullcalendar-root {
+  background: #fff;
+  padding: 1rem;
+  border-radius: 0.25rem;
+}
+
+.highlight-row {
+  outline: 2px solid #f59e0b;
+}

@@ -3,6 +3,7 @@ auto-create gate, and the single event-creation code path shared by
 automatic processing and the Django admin 'approve and create event' action.
 """
 
+import base64
 import hashlib
 from datetime import timedelta
 
@@ -67,6 +68,20 @@ def check_for_duplicate(parsed_action: ParsedAction, calendar_id: str):
         return "duplicate", candidate
 
     return "none", None
+
+
+def build_google_calendar_event_url(google_event_id: str, calendar_id: str) -> str | None:
+    """Best-effort deep link to view an existing event in the Google Calendar
+    web UI, for display in the family web app (Phase 3). Uses the
+    widely-observed `eid` query parameter: URL-safe base64 of
+    "<event_id> <calendar_id>". Returns None if either id is missing so
+    callers never render a broken link — this is read-only display, never
+    used to authorise or perform any action."""
+    if not google_event_id or not calendar_id:
+        return None
+    raw = f"{google_event_id} {calendar_id}".encode("utf-8")
+    eid = base64.urlsafe_b64encode(raw).decode("utf-8").rstrip("=")
+    return f"https://www.google.com/calendar/event?eid={eid}"
 
 
 def passes_auto_create_gate(parsed_action: ParsedAction) -> tuple[bool, list[str]]:

@@ -1,4 +1,4 @@
-# Family Email Assistant — Phase 1 + Phase 2
+# Family Email Assistant — Phase 1 + 2 + 3
 
 A deliberately scoped Django app. Phase 1: forward an appointment email to
 `lifeofchukwudi@gmail.com`, it gets extracted, validated, and either added to
@@ -7,17 +7,19 @@ admin for manual review. Phase 2 adds direct email commands on top of the
 same pipeline: **tasks, notes, email reminders, and marking a task
 complete** — still one primary action per email (plus, optionally, one
 linked reminder when explicitly requested alongside a calendar event).
-
-No custom family dashboard and no Oracle/production deployment config yet —
-still out of scope.
+Phase 3 adds a small authenticated **family web interface** (Upcoming,
+Calendar, Tasks, Notes, Review) on top of the same data, plus a production
+settings structure and Oracle deployment files — see
+[`PHASE_3_COMPLETE.md`](PHASE_3_COMPLETE.md).
 
 ## Project structure
 
 ```text
-config/       Django project settings/urls
-core/         All models + Django admin (the review UI)
-assistant/    Gmail / OpenAI / Calendar services + management commands
-web/          Minimal views (health check only)
+config/                Django project settings (config/settings/{base,development,production}.py) + urls
+core/                   All models + Django admin (the staff review UI)
+assistant/              Gmail / OpenAI / Calendar services + management commands
+web/                     Family web interface (Upcoming/Calendar/Tasks/Notes/Review) + health checks
+deploy/                  systemd units, Nginx example config, Gunicorn config, update script
 ```
 
 `assistant/services/`:
@@ -119,7 +121,8 @@ does not bypass either.
 
 ## Django admin
 
-`http://localhost:8000/admin/` — review `ParsedAction` records saved as
+`http://localhost:8000/admin/` — restricted to staff users (Django's
+default admin behaviour). Review `ParsedAction` records saved as
 `pending_review` and use **Approve pending parsed actions**, which dispatches
 to the same creation/completion functions used by automatic processing (no
 duplicated business logic). Also:
@@ -128,6 +131,59 @@ duplicated business logic). Also:
 - **Reminder** admin: *Cancel selected reminders*, *Reset stale processing
   reminders to pending*, *Retry selected failed reminders*.
 - **Note** admin: browse/search saved notes.
+
+Accounts (for both `/admin/` and the family web app below) are created
+only through `createsuperuser` or `/admin/` → Users → Add user. There is no
+public sign-up page.
+
+## Web interface (Phase 3)
+
+`http://localhost:8000/` — a small authenticated family dashboard built with
+Django templates, Bootstrap, and FullCalendar (no separate frontend
+framework, no new Django app). Every page requires login; the default
+landing page is **Upcoming**.
+
+- **Upcoming** (`/`) — chronological feed combining Google Calendar events
+  and task due dates in the next 30 days, overdue tasks (near the top),
+  pending reminders, and pending-review actions.
+- **Calendar** (`/calendar/`) — FullCalendar month/week/list views, fed by
+  the authenticated JSON endpoint at `/calendar/events.json`. Distinguishes
+  calendar events, task due dates, and reminders by colour; clicking an
+  event opens a details modal with a link into Google Calendar where one
+  can be safely constructed.
+- **Tasks** (`/tasks/`) — filter by status/assignee/overdue, search, create,
+  edit, mark complete, cancel. Uses plain Django `ModelForm`s; task
+  completion/cancellation call the same `assistant/services/tasks.py`
+  functions used by the email pipeline and Django admin.
+- **Notes** (`/notes/`) — list, search, category filter, create, edit,
+  detail view.
+- **Review** (`/review/`) — the pending-review queue. Non-staff users see
+  only a count; staff users can edit extracted fields, approve (via the
+  same `admin_approve_and_execute` service Django admin uses), reject, or
+  jump to the full record in Django admin.
+
+Raw email bodies are never rendered in the web app for non-staff users —
+only subject/sender/date/extracted-field summaries. Full email content
+review still happens in Django admin (staff-only).
+
+## Production settings & deployment (Phase 3)
+
+Settings are split into `config/settings/{base,development,production}.py`.
+Local `manage.py`/`wsgi.py`/`asgi.py` default to
+`config.settings.development`; production sets
+`DJANGO_SETTINGS_MODULE=config.settings.production` as a process
+environment variable (see `.env.example` and `DEPLOY_ORACLE.md`).
+Production refuses to start with a blank/default secret key, missing
+`DJANGO_ALLOWED_HOSTS`, or missing `DATABASE_URL`.
+
+See [`DEPLOY_ORACLE.md`](DEPLOY_ORACLE.md) for the full Oracle + Nginx +
+Gunicorn + systemd + Supabase deployment guide (nothing in that guide is run
+automatically — you run each step yourself), and `deploy/` for the systemd
+units, Nginx example config, Gunicorn config, and update script.
+
+`GET /health/` returns a small JSON status (and, optionally, a lightweight
+DB check) — never calls Gmail, Calendar, or OpenAI. `GET /healthz/` is the
+original Phase 1 liveness check, kept for backwards compatibility.
 
 ## Tests
 
@@ -140,11 +196,14 @@ and run against SQLite in memory.
 
 ## Manual testing
 
-See [`MANUAL_TEST_PHASE_1.md`](MANUAL_TEST_PHASE_1.md) and
-[`MANUAL_TEST_PHASE_2.md`](MANUAL_TEST_PHASE_2.md) for end-to-end steps using
-the real Gmail/Calendar/OpenAI accounts.
+See [`MANUAL_TEST_PHASE_1.md`](MANUAL_TEST_PHASE_1.md),
+[`MANUAL_TEST_PHASE_2.md`](MANUAL_TEST_PHASE_2.md), and
+[`MANUAL_TEST_PHASE_3.md`](MANUAL_TEST_PHASE_3.md) for end-to-end steps
+using the real Gmail/Calendar/OpenAI accounts and (for Phase 3) a real
+Oracle deployment.
 
 ## Out of scope so far
 
-Attachment parsing, Celery/Redis/Docker, a custom frontend/dashboard,
-deployment to Oracle.
+Attachment parsing, Celery/Redis/Docker, drag-and-drop calendar editing,
+public self-service registration, a mobile app, and any new assistant
+capability beyond what Phase 1/2 already built.

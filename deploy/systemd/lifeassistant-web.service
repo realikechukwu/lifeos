@@ -1,0 +1,32 @@
+[Unit]
+Description=Family Assistant web app (Gunicorn)
+After=network.target
+
+[Service]
+Type=simple
+User=<LINUX_USERNAME>
+Group=<LINUX_USERNAME>
+WorkingDirectory=<PROJECT_PATH>
+
+# RuntimeDirectory creates /run/lifeassistant (owned by the user above) on
+# start and removes it on stop — matches deploy/gunicorn.conf.py's default
+# unix socket path. Nginx must be able to read/write this socket; if Nginx
+# runs as a different user/group, add that user to the Linux group above,
+# or switch GUNICORN_BIND to a localhost TCP port instead.
+RuntimeDirectory=lifeassistant
+RuntimeDirectoryMode=0750
+
+EnvironmentFile=<ENV_FILE_PATH>
+Environment=DJANGO_SETTINGS_MODULE=config.settings.production
+
+ExecStart=<VENV_PATH>/bin/gunicorn --config <PROJECT_PATH>/deploy/gunicorn.conf.py config.wsgi:application
+
+Restart=on-failure
+RestartSec=5
+
+# Do not run as root.
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

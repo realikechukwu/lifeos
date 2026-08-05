@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Upcoming — Family Assistant{% endblock %}
+{% block content %}
+<h1 class="h3 mb-3">Upcoming</h1>
+<p class="text-muted">
+  Calendar events and task due dates in the next 30 days, overdue tasks, pending reminders,
+  and anything waiting for review — most urgent first.
+</p>
+
+{% if not items %}
+  <div class="alert alert-secondary">Nothing upcoming right now.</div>
+{% else %}
+  <div class="list-group-flex">
+    {% for item in items %}
+      <div class="feed-item kind-{{ item.kind }}">
+        <div class="d-flex justify-content-between align-items-start flex-wrap">
+          <div>
+            <div class="kind-label">{{ item.kind_label }}{% if item.is_overdue %} · overdue{% endif %}</div>
+            <div class="fw-semibold">{{ item.title }}</div>
+            <div class="small text-muted">
+              {% if item.when_label %}{{ item.when_label }}{% endif %}
+              {% if item.assignee %} · {{ item.assignee }}{% endif %}
+              {% if item.location %} · {{ item.location }}{% endif %}
+            </div>
+          </div>
+          <div class="text-end small">
+            <span class="badge {% if item.is_overdue %}bg-danger{% elif item.kind == 'review' %}bg-purple bg-opacity-75 text-white{% else %}bg-secondary{% endif %}">
+              {{ item.status }}
+            </span>
+            <div class="mt-1">
+              {% if item.detail_url %}<a href="{{ item.detail_url }}">View</a>{% endif %}
+              {% for label, url in item.extra_links %}
+                {% if item.detail_url %} · {% endif %}<a href="{{ url }}" target="_blank" rel="noopener">{{ label }}</a>
+              {% endfor %}
+            </div>
+          </div>
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+{% endif %}
+{% endblock %}

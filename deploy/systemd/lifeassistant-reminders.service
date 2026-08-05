@@ -1,0 +1,22 @@
+[Unit]
+Description=Family Assistant — send due reminders (triggered by lifeassistant-reminders.timer)
+After=network.target
+# Same overlap-prevention reasoning as lifeassistant-gmail.service: systemd
+# will not start a second instance of this unit while one is still running.
+# send_due_reminders additionally claims rows with select_for_update(
+# skip_locked=True) before sending, so even a genuinely concurrent run
+# (e.g. a manual invocation during a scheduled one) cannot double-send.
+
+[Service]
+Type=oneshot
+User=<LINUX_USERNAME>
+Group=<LINUX_USERNAME>
+WorkingDirectory=<PROJECT_PATH>
+EnvironmentFile=<ENV_FILE_PATH>
+Environment=DJANGO_SETTINGS_MODULE=config.settings.production
+ExecStart=<VENV_PATH>/bin/python manage.py send_due_reminders
+
+TimeoutStartSec=120
+
+NoNewPrivileges=true
+PrivateTmp=true

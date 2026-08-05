@@ -1,5 +1,7 @@
 """
-Django settings for the Family Email Assistant (Phase 1).
+Django settings for the Family Email Assistant — settings shared by every
+environment. `development.py` and `production.py` both start with
+`from .base import *` and only override what genuinely differs.
 """
 
 import os
@@ -9,7 +11,7 @@ from pathlib import Path
 import dj_database_url
 from dotenv import load_dotenv
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 load_dotenv(BASE_DIR / ".env")
 
@@ -27,10 +29,6 @@ def _list_env(name, default=""):
 
 
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "django-insecure-dev-only-change-me")
-
-DEBUG = _bool_env("DJANGO_DEBUG", True)
-
-ALLOWED_HOSTS = _list_env("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1")
 
 
 # Application definition
@@ -69,6 +67,7 @@ TEMPLATES = [
                 "django.template.context_processors.request",
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
+                "web.context_processors.pending_review_count",
             ],
         },
     },
@@ -115,6 +114,9 @@ AUTH_PASSWORD_VALIDATORS = [
 
 
 # Internationalization
+# LANGUAGE_CODE stays en-gb; TIME_ZONE is the *display* timezone (Europe/London
+# per household default) — all datetimes are stored timezone-aware (UTC) and
+# converted for display, per USE_TZ = True below.
 
 LANGUAGE_CODE = "en-gb"
 
@@ -130,8 +132,29 @@ USE_TZ = True
 
 STATIC_URL = "static/"
 STATICFILES_DIRS = [BASE_DIR / "static"] if (BASE_DIR / "static").exists() else []
+STATIC_ROOT = BASE_DIR / "staticfiles"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+
+# Auth / login flow — no public signup; accounts are created via Django
+# admin only. Every family page requires authentication (see web/views.py).
+
+LOGIN_URL = "login"
+LOGIN_REDIRECT_URL = "web:upcoming"
+LOGOUT_REDIRECT_URL = "login"
+
+# Map Django's "error" message level to Bootstrap's "danger" alert class.
+from django.contrib.messages import constants as _message_constants  # noqa: E402
+
+MESSAGE_TAGS = {_message_constants.ERROR: "danger"}
+
+
+# Reasonable request body limits (this app never accepts large uploads).
+
+DATA_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024  # 5 MB
+FILE_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024  # 5 MB
+DATA_UPLOAD_MAX_NUMBER_FIELDS = 200
 
 
 # ---------------------------------------------------------------------------
@@ -163,3 +186,46 @@ AUTOMATIC_ACTION_CONFIDENCE_THRESHOLD = float(
 
 GMAIL_POLL_MAX_MESSAGES = 25
 GMAIL_POLL_QUERY_NEWER_THAN = "7d"
+
+# Shown in the web UI footer / used to build absolute links where needed
+# (e.g. in emails generated from the web app in a future phase). Never
+# required for the app to function locally.
+APP_BASE_URL = os.environ.get("APP_BASE_URL", "")
+
+
+# ---------------------------------------------------------------------------
+# Logging — safe by default: never logs email bodies, OAuth tokens, API
+# keys, extracted sensitive appointment content, or session cookies.
+# Environments override the handlers/level, not what gets logged.
+# ---------------------------------------------------------------------------
+
+LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "structured": {
+            "format": "%(asctime)s level=%(levelname)s logger=%(name)s %(message)s",
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "structured",
+        },
+    },
+    "root": {
+        "handlers": ["console"],
+        "level": LOG_LEVEL,
+    },
+    "loggers": {
+        "django": {"handlers": ["console"], "level": LOG_LEVEL, "propagate": False},
+        "django.security": {"handlers": ["console"], "level": LOG_LEVEL, "propagate": False},
+        # Deliberately do NOT set a low level for django.db.backends /
+        # django.request bodies here — leave at default WARNING to avoid
+        # accidentally logging SQL parameters or request payloads.
+        "assistant": {"handlers": ["console"], "level": LOG_LEVEL, "propagate": False},
+        "web": {"handlers": ["console"], "level": LOG_LEVEL, "propagate": False},
+    },
+}

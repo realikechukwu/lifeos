@@ -114,6 +114,24 @@ def find_matching_open_tasks(search_text: str) -> list[Task]:
     return partial_matches
 
 
+def cancel_task(task: Task, source_email=None) -> Task:
+    """Single execution path for cancelling a task (used by the Phase 3 web
+    Tasks page). Mirrors complete_task's shape so both share the same audit
+    trail pattern."""
+    task.status = Task.Status.CANCELLED
+    task.save(update_fields=["status", "updated_at"])
+
+    AuditLog.objects.create(
+        source_email=source_email,
+        action="task_cancelled",
+        object_type="Task",
+        object_id=str(task.id),
+        success=True,
+        details={"title": task.title},
+    )
+    return task
+
+
 def complete_task(task: Task, source_email=None) -> Task:
     """Single execution path for completing a task."""
     task.status = Task.Status.COMPLETED

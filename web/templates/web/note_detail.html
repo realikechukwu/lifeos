@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}{{ note.title|default:"Note" }} — Family Assistant{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-start">
+  <h1 class="h3">{{ note.title|default:"(untitled note)" }}</h1>
+  <a href="{% url 'web:note_edit' note.id %}" class="btn btn-outline-secondary btn-sm">Edit</a>
+</div>
+{% if note.category %}<span class="badge bg-secondary mb-2">{{ note.category }}</span>{% endif %}
+<p class="text-muted small">
+  Created {{ note.created_at|date:"d M Y H:i" }}
+  {% if note.related_household_member %} · Related to {{ note.related_household_member.name }}{% endif %}
+  {% if note.source_email %} · Created from an email{% endif %}
+</p>
+<div class="card">
+  <div class="card-body">
+    <p style="white-space: pre-wrap;">{{ note.body }}</p>
+  </div>
+</div>
+<a href="{% url 'web:note_list' %}" class="d-inline-block mt-3">&larr; Back to notes</a>
+{% endblock %}
