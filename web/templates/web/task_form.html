@@ -1,19 +1,49 @@
 {% extends "base.html" %}
 {% block title %}{% if mode == "edit" %}Edit task{% else %}New task{% endif %} — Family Assistant{% endblock %}
-{% block content %}
-<h1 class="h3 mb-3">{% if mode == "edit" %}Edit task{% else %}New task{% endif %}</h1>
 
-<form method="post" class="col-lg-6">
-  {% csrf_token %}
-  {% for field in form %}
-    <div class="mb-3">
-      <label class="form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
-      {{ field }}
-      {% if field.errors %}<div class="text-danger small">{{ field.errors|join:", " }}</div>{% endif %}
-      {% if field.help_text %}<div class="form-text">{{ field.help_text }}</div>{% endif %}
-    </div>
-  {% endfor %}
-  <button type="submit" class="btn btn-primary">Save</button>
-  <a href="{% url 'web:task_list' %}" class="btn btn-link">Cancel</a>
-</form>
+{% block content %}
+<a href="{% url 'web:task_list' %}" class="back-link mb-3">
+  <i class="bi bi-arrow-left"></i> All tasks
+</a>
+
+<div class="page-head">
+  <div>
+    <h1 class="page-title">{% if mode == "edit" %}Edit task{% else %}New task{% endif %}</h1>
+    <p class="page-sub">
+      {% if mode == "edit" %}Update the details below and save.{% else %}Add something the household needs to get done.{% endif %}
+    </p>
+  </div>
+</div>
+
+<div class="row">
+  <div class="col-12 col-lg-7">
+    <form method="post" novalidate>
+      {% csrf_token %}
+
+      {% if form.non_field_errors %}
+        <div class="alert alert-danger">{{ form.non_field_errors|join:", " }}</div>
+      {% endif %}
+
+      <div class="card">
+        <div class="card-body">
+          {% for field in form %}
+            <div class="field">
+              <label class="form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+              {{ field }}
+              {% if field.errors %}<div class="field-error">{{ field.errors|join:", " }}</div>{% endif %}
+              {% if field.help_text %}<div class="form-text">{{ field.help_text }}</div>{% endif %}
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div class="form-actions is-sticky">
+        <button type="submit" class="btn btn-primary">
+          <i class="bi bi-check2 me-1"></i> Save task
+        </button>
+        <a href="{% url 'web:task_list' %}" class="btn btn-outline-secondary">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
 {% endblock %}

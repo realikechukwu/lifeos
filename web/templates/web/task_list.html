@@ -1,81 +1,214 @@
 {% extends "base.html" %}
 {% block title %}Tasks — Family Assistant{% endblock %}
+
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-3">
-  <h1 class="h3 mb-0">Tasks</h1>
-  <a href="{% url 'web:task_create' %}" class="btn btn-primary btn-sm">+ New task</a>
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Tasks</h1>
+    <p class="page-sub">Everything the household is tracking, newest filters applied first.</p>
+  </div>
+  <a href="{% url 'web:task_create' %}" class="btn btn-primary btn-sm d-none d-md-inline-flex">
+    <i class="bi bi-plus-lg me-1"></i> New task
+  </a>
 </div>
 
-<form method="get" class="row row-cols-lg-auto g-2 align-items-center mb-3">
-  <div class="col-12">
-    <input type="text" name="q" class="form-control form-control-sm" placeholder="Search title/description" value="{{ current_q }}">
+{# Quick filters — one tap, no form needed #}
+<div class="chip-row">
+  <a href="{% url 'web:task_list' %}"
+     class="chip-link {% if not current_status and not overdue_only and not current_assigned_to and not current_q %}active{% endif %}">All</a>
+  <a href="?overdue=1" class="chip-link {% if overdue_only %}active{% endif %}">
+    <i class="bi bi-exclamation-triangle"></i> Overdue
+  </a>
+  {% for value, label in status_choices %}
+    <a href="?status={{ value }}" class="chip-link {% if value == current_status %}active{% endif %}">{{ label }}</a>
+  {% endfor %}
+</div>
+
+{# Full filter set, collapsed by default so it doesn't eat the screen on mobile #}
+<div class="filter-bar">
+  <button class="filter-toggle" type="button" data-bs-toggle="collapse"
+          data-bs-target="#taskFilters" aria-expanded="false" aria-controls="taskFilters">
+    <span><i class="bi bi-funnel me-1"></i> Search &amp; filters</span>
+    <i class="bi bi-chevron-down chev"></i>
+  </button>
+
+  <div class="collapse" id="taskFilters">
+    <div class="filter-body">
+      <form method="get" class="row g-2">
+        <div class="col-12">
+          <div class="search-wrap">
+            <i class="bi bi-search"></i>
+            <input type="search" name="q" class="form-control form-control-sm"
+                   placeholder="Search title or description" value="{{ current_q }}">
+          </div>
+        </div>
+
+        <div class="col-6 col-md-4">
+          <select name="status" class="form-select form-select-sm" aria-label="Status">
+            <option value="">Any status</option>
+            {% for value, label in status_choices %}
+              <option value="{{ value }}" {% if value == current_status %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="col-6 col-md-4">
+          <select name="assigned_to" class="form-select form-select-sm" aria-label="Assignee">
+            <option value="">Anyone</option>
+            {% for value, label in assigned_to_choices %}
+              <option value="{{ value }}" {% if value == current_assigned_to %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="col-12 col-md-4 d-flex align-items-center">
+          <div class="form-check mb-0">
+            <input type="checkbox" class="form-check-input" id="overdue" name="overdue" value="1"
+                   {% if overdue_only %}checked{% endif %}>
+            <label class="form-check-label" for="overdue">Overdue only</label>
+          </div>
+        </div>
+
+        <div class="col-12 d-flex gap-2 mt-1">
+          <button type="submit" class="btn btn-primary btn-sm flex-fill flex-md-grow-0">Apply filters</button>
+          <a href="{% url 'web:task_list' %}" class="btn btn-outline-secondary btn-sm">Reset</a>
+        </div>
+      </form>
+    </div>
   </div>
-  <div class="col-12">
-    <select name="status" class="form-select form-select-sm">
-      <option value="">Any status</option>
-      {% for value, label in status_choices %}
-        <option value="{{ value }}" {% if value == current_status %}selected{% endif %}>{{ label }}</option>
-      {% endfor %}
-    </select>
-  </div>
-  <div class="col-12">
-    <select name="assigned_to" class="form-select form-select-sm">
-      <option value="">Anyone</option>
-      {% for value, label in assigned_to_choices %}
-        <option value="{{ value }}" {% if value == current_assigned_to %}selected{% endif %}>{{ label }}</option>
-      {% endfor %}
-    </select>
-  </div>
-  <div class="col-12 form-check">
-    <input type="checkbox" class="form-check-input" id="overdue" name="overdue" value="1" {% if overdue_only %}checked{% endif %}>
-    <label class="form-check-label" for="overdue">Overdue only</label>
-  </div>
-  <div class="col-12">
-    <button type="submit" class="btn btn-outline-secondary btn-sm">Filter</button>
-    <a href="{% url 'web:task_list' %}" class="btn btn-link btn-sm">Reset</a>
-  </div>
-</form>
+</div>
 
 {% if not tasks %}
-  <div class="alert alert-secondary">No tasks match these filters.</div>
+  <div class="empty">
+    <div class="empty-icon"><i class="bi bi-clipboard-check"></i></div>
+    <div class="empty-title">No tasks here</div>
+    <p class="empty-text">Nothing matches these filters. Try resetting them, or add a new task.</p>
+    <a href="{% url 'web:task_create' %}" class="btn btn-primary btn-sm"><i class="bi bi-plus-lg"></i> New task</a>
+  </div>
 {% else %}
-<div class="table-responsive">
-<table class="table table-sm align-middle bg-white">
-  <thead>
-    <tr>
-      <th>Title</th>
-      <th>Assignee</th>
-      <th>Status</th>
-      <th>Priority</th>
-      <th>Due</th>
-      <th></th>
-    </tr>
-  </thead>
-  <tbody>
+
+  {# ---------- Mobile: cards ---------- #}
+  <div class="only-mobile">
     {% for task in tasks %}
-    <tr class="{% if task.id == highlight_id %}highlight-row{% endif %} {% if task.due_date and task.due_date < today and task.status != "completed" and task.status != "cancelled" %}table-danger{% endif %}">
-      <td>{{ task.title }}</td>
-      <td>{{ task.get_assigned_to_display }}</td>
-      <td><span class="badge bg-secondary">{{ task.get_status_display }}</span></td>
-      <td>{{ task.get_priority_display }}</td>
-      <td>{{ task.due_date|default:"—" }} {{ task.due_time|default:"" }}</td>
-      <td class="text-end">
-        <a href="{% url 'web:task_edit' task.id %}" class="btn btn-sm btn-outline-secondary">Edit</a>
-        {% if task.status != "completed" and task.status != "cancelled" %}
-        <form method="post" action="{% url 'web:task_complete' task.id %}" class="d-inline">
-          {% csrf_token %}
-          <button type="submit" class="btn btn-sm btn-outline-success">Complete</button>
-        </form>
-        <form method="post" action="{% url 'web:task_cancel' task.id %}" class="d-inline">
-          {% csrf_token %}
-          <button type="submit" class="btn btn-sm btn-outline-danger">Cancel</button>
-        </form>
+      <div class="tile {% if task.status == 'completed' %}accent-ok{% elif task.status == 'cancelled' %}{% else %}accent-brand{% endif %} {% if task.id == highlight_id %}is-highlighted{% endif %}"
+           {% if task.id == highlight_id %}id="task-{{ task.id }}"{% endif %}>
+        <div class="d-flex align-items-start justify-content-between gap-2">
+          <p class="tile-title">{{ task.title }}</p>
+          <span class="chip {% if task.status == 'completed' %}chip-ok{% elif task.status == 'cancelled' %}{% elif task.due_date and task.due_date < today %}chip-danger{% else %}chip-brand{% endif %}">
+            {{ task.get_status_display }}
+          </span>
+        </div>
+
+        <div class="tile-meta">
+          {% if task.due_date %}
+            <span class="{% if task.due_date < today and task.status != 'completed' and task.status != 'cancelled' %}text-danger fw-semibold{% endif %}">
+              <i class="bi bi-calendar-event"></i>
+              {{ task.due_date|date:"D d M" }}{% if task.due_time %} · {{ task.due_time|time:"H:i" }}{% endif %}
+              {% if task.due_date < today and task.status != 'completed' and task.status != 'cancelled' %} · overdue{% endif %}
+            </span>
+          {% else %}
+            <span class="text-faint"><i class="bi bi-calendar-x"></i> No due date</span>
+          {% endif %}
+          <span class="sep"><i class="bi bi-person"></i> {{ task.get_assigned_to_display }}</span>
+          <span class="sep"><i class="bi bi-flag"></i> {{ task.get_priority_display }}</span>
+        </div>
+
+        {% if task.description %}
+          <p class="tile-body">{{ task.description }}</p>
         {% endif %}
-      </td>
-    </tr>
+
+        <div class="tile-actions">
+          <a href="{% url 'web:task_edit' task.id %}" class="btn btn-sm btn-outline-secondary">
+            <i class="bi bi-pencil"></i> Edit
+          </a>
+          {% if task.status != "completed" and task.status != "cancelled" %}
+            <form method="post" action="{% url 'web:task_complete' task.id %}" class="d-inline">
+              {% csrf_token %}
+              <button type="submit" class="btn btn-sm btn-outline-success"><i class="bi bi-check2"></i> Complete</button>
+            </form>
+            <form method="post" action="{% url 'web:task_cancel' task.id %}" class="d-inline">
+              {% csrf_token %}
+              <button type="submit" class="btn btn-sm btn-outline-danger"><i class="bi bi-x-lg"></i> Cancel</button>
+            </form>
+          {% endif %}
+        </div>
+      </div>
     {% endfor %}
-  </tbody>
-</table>
-</div>
+  </div>
+
+  {# ---------- Desktop: table ---------- #}
+  <div class="only-desktop table-wrap">
+    <table class="table table-hover align-middle mb-0">
+      <thead>
+        <tr>
+          <th>Title</th>
+          <th>Assignee</th>
+          <th>Status</th>
+          <th>Priority</th>
+          <th>Due</th>
+          <th class="text-end">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for task in tasks %}
+        <tr class="{% if task.id == highlight_id %}is-highlighted{% endif %}">
+          <td>
+            <span class="fw-semibold">{{ task.title }}</span>
+            {% if task.description %}
+              <div class="small text-muted truncate" style="max-width: 34ch;">{{ task.description }}</div>
+            {% endif %}
+          </td>
+          <td class="small">{{ task.get_assigned_to_display }}</td>
+          <td>
+            <span class="chip {% if task.status == 'completed' %}chip-ok{% elif task.status == 'cancelled' %}{% else %}chip-brand{% endif %}">
+              {{ task.get_status_display }}
+            </span>
+          </td>
+          <td class="small">{{ task.get_priority_display }}</td>
+          <td class="small tabular {% if task.due_date and task.due_date < today and task.status != 'completed' and task.status != 'cancelled' %}text-danger fw-semibold{% endif %}">
+            {% if task.due_date %}
+              {{ task.due_date|date:"d M Y" }}{% if task.due_time %} {{ task.due_time|time:"H:i" }}{% endif %}
+            {% else %}<span class="text-faint">—</span>{% endif %}
+          </td>
+          <td class="text-end">
+            <div class="d-inline-flex gap-1">
+              <a href="{% url 'web:task_edit' task.id %}" class="btn btn-sm btn-outline-secondary">Edit</a>
+              {% if task.status != "completed" and task.status != "cancelled" %}
+                <form method="post" action="{% url 'web:task_complete' task.id %}" class="d-inline">
+                  {% csrf_token %}
+                  <button type="submit" class="btn btn-sm btn-outline-success">Complete</button>
+                </form>
+                <form method="post" action="{% url 'web:task_cancel' task.id %}" class="d-inline">
+                  {% csrf_token %}
+                  <button type="submit" class="btn btn-sm btn-outline-danger">Cancel</button>
+                </form>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
 {% endif %}
+{% endblock %}
+
+{% block fab %}
+<a href="{% url 'web:task_create' %}" class="fab" aria-label="New task"><i class="bi bi-plus-lg"></i></a>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+  // If a filter other than the quick chips is active, open the panel so the
+  // user can see why the list is filtered.
+  document.addEventListener("DOMContentLoaded", function () {
+    var params = new URLSearchParams(window.location.search);
+    if (params.get("q") || params.get("assigned_to")) {
+      var panel = document.getElementById("taskFilters");
+      if (panel) new bootstrap.Collapse(panel, { toggle: true });
+    }
+    var highlighted = document.querySelector(".is-highlighted");
+    if (highlighted) highlighted.scrollIntoView({ block: "center", behavior: "smooth" });
+  });
+</script>
 {% endblock %}

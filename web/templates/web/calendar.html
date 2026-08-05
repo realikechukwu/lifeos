@@ -1,39 +1,47 @@
 {% extends "base.html" %}
 {% block title %}Calendar — Family Assistant{% endblock %}
+
 {% block extra_head %}
 <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.15/index.global.min.js"></script>
 {% endblock %}
+
 {% block content %}
-<h1 class="h3 mb-3">Calendar</h1>
-<p class="text-muted">
-  <span class="badge" style="background:#2563eb;">&nbsp;</span> Calendar events
-  &nbsp;<span class="badge" style="background:#f59e0b;">&nbsp;</span> Task due dates
-  &nbsp;<span class="badge" style="background:#dc2626;">&nbsp;</span> Overdue task due dates
-  &nbsp;<span class="badge" style="background:#16a34a;">&nbsp;</span> Reminders
-</p>
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Calendar</h1>
+    <p class="page-sub">Events, task due dates and reminders in one view. Tap anything for details.</p>
+  </div>
+</div>
+
+<div class="legend">
+  <span class="legend-item"><span class="legend-swatch" style="background:#2563eb"></span> Events</span>
+  <span class="legend-item"><span class="legend-swatch" style="background:#f59e0b"></span> Task due</span>
+  <span class="legend-item"><span class="legend-swatch" style="background:#dc2626"></span> Overdue</span>
+  <span class="legend-item"><span class="legend-swatch" style="background:#16a34a"></span> Reminders</span>
+</div>
 
 <div id="fullcalendar-root"></div>
 
-<!-- Event detail modal -->
 <div class="modal fade" id="eventDetailModal" tabindex="-1" aria-hidden="true">
-  <div class="modal-dialog">
+  <div class="modal-dialog modal-dialog-centered">
     <div class="modal-content">
       <div class="modal-header">
         <h5 class="modal-title" id="eventDetailTitle">Event</h5>
         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
       <div class="modal-body">
-        <dl class="row mb-0">
-          <dt class="col-4">Type</dt><dd class="col-8" id="eventDetailType"></dd>
-          <dt class="col-4">When</dt><dd class="col-8" id="eventDetailWhen"></dd>
-          <dt class="col-4">Status</dt><dd class="col-8" id="eventDetailStatus"></dd>
-          <dt class="col-4">Assignee</dt><dd class="col-8" id="eventDetailAssignee"></dd>
-          <dt class="col-4">Location</dt><dd class="col-8" id="eventDetailLocation"></dd>
-        </dl>
+        <div class="kv">
+          <div class="kv-row"><div class="kv-key">Type</div><div class="kv-val" id="eventDetailType"></div></div>
+          <div class="kv-row"><div class="kv-key">When</div><div class="kv-val" id="eventDetailWhen"></div></div>
+          <div class="kv-row"><div class="kv-key">Status</div><div class="kv-val" id="eventDetailStatus"></div></div>
+          <div class="kv-row"><div class="kv-key">Assignee</div><div class="kv-val" id="eventDetailAssignee"></div></div>
+          <div class="kv-row"><div class="kv-key">Location</div><div class="kv-val" id="eventDetailLocation"></div></div>
+        </div>
       </div>
       <div class="modal-footer">
-        <a href="#" id="eventDetailGoogleLink" target="_blank" rel="noopener" class="btn btn-outline-primary btn-sm d-none">
-          Open in Google Calendar
+        <a href="#" id="eventDetailGoogleLink" target="_blank" rel="noopener"
+           class="btn btn-outline-primary btn-sm d-none">
+          <i class="bi bi-box-arrow-up-right"></i> Google Calendar
         </a>
         <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Close</button>
       </div>
@@ -49,22 +57,29 @@ document.addEventListener("DOMContentLoaded", function () {
   var modalEl = document.getElementById("eventDetailModal");
   var modal = new bootstrap.Modal(modalEl);
 
+  // Phones get the list view by default — a month grid is unreadable at 375px.
+  var isSmall = window.matchMedia("(max-width: 575.98px)").matches;
+
   var calendar = new FullCalendar.Calendar(calendarEl, {
     timeZone: "Europe/London",
     headerToolbar: {
       left: "prev,next today",
       center: "title",
-      right: "dayGridMonth,timeGridWeek,listMonth",
+      right: isSmall ? "listMonth,dayGridMonth" : "dayGridMonth,timeGridWeek,listMonth",
     },
-    initialView: "dayGridMonth",
+    buttonText: { today: "Today", month: "Month", week: "Week", list: "List" },
+    initialView: isSmall ? "listMonth" : "dayGridMonth",
+    firstDay: 1,
     height: "auto",
+    dayMaxEventRows: isSmall ? 2 : 4,
+    noEventsText: "Nothing scheduled this month.",
     events: "{% url 'web:calendar_events_json' %}",
     eventClick: function (info) {
       info.jsEvent.preventDefault();
       var props = info.event.extendedProps;
       document.getElementById("eventDetailTitle").textContent = info.event.title;
-      document.getElementById("eventDetailType").textContent = props.type || "";
-      document.getElementById("eventDetailStatus").textContent = props.status || "";
+      document.getElementById("eventDetailType").textContent = props.type || "—";
+      document.getElementById("eventDetailStatus").textContent = props.status || "—";
       document.getElementById("eventDetailAssignee").textContent = props.assignee || "—";
       document.getElementById("eventDetailLocation").textContent = props.location || "—";
 
@@ -83,7 +98,18 @@ document.addEventListener("DOMContentLoaded", function () {
       modal.show();
     },
   });
+
   calendar.render();
+
+  // Keep the layout sensible if the device is rotated.
+  var lastSmall = isSmall;
+  window.addEventListener("resize", function () {
+    var nowSmall = window.matchMedia("(max-width: 575.98px)").matches;
+    if (nowSmall !== lastSmall) {
+      lastSmall = nowSmall;
+      calendar.changeView(nowSmall ? "listMonth" : "dayGridMonth");
+    }
+  });
 });
 </script>
 {% endblock %}

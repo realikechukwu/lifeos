@@ -1,43 +1,109 @@
 {% extends "base.html" %}
 {% block title %}Review — Family Assistant{% endblock %}
+
 {% block content %}
-<h1 class="h3 mb-3">Review</h1>
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Review</h1>
+    <p class="page-sub">
+      Actions the assistant extracted from email that need a human to confirm before they happen.
+    </p>
+  </div>
+</div>
 
 {% if not is_staff %}
-  <div class="alert alert-info">
-    There {{ pending_count|pluralize:"is,are" }} <strong>{{ pending_count }}</strong>
-    item{{ pending_count|pluralize }} waiting for staff review. Only staff accounts can approve or reject these.
+  <div class="empty">
+    <div class="empty-icon"><i class="bi bi-shield-lock"></i></div>
+    <div class="empty-title">
+      {{ pending_count }} item{{ pending_count|pluralize }} waiting for review
+    </div>
+    <p class="empty-text">
+      Only staff accounts can approve or reject these. Ask an administrator if you need access.
+    </p>
   </div>
 {% else %}
   {% if not actions %}
-    <div class="alert alert-secondary">Nothing is pending review.</div>
+    <div class="empty">
+      <div class="empty-icon"><i class="bi bi-inbox"></i></div>
+      <div class="empty-title">Inbox zero</div>
+      <p class="empty-text">Nothing is pending review right now.</p>
+    </div>
   {% else %}
-  <div class="table-responsive">
-  <table class="table table-sm bg-white align-middle">
-    <thead>
-      <tr>
-        <th>Subject</th>
-        <th>Outer sender</th>
-        <th>Received</th>
-        <th>Proposed action</th>
-        <th>Confidence</th>
-        <th></th>
-      </tr>
-    </thead>
-    <tbody>
+
+    {# ---------- Mobile: cards ---------- #}
+    <div class="only-mobile">
       {% for action in actions %}
-      <tr>
-        <td>{{ action.incoming_email.subject|default:"(no subject)" }}</td>
-        <td>{{ action.incoming_email.outer_sender }}</td>
-        <td>{{ action.incoming_email.received_at|date:"d M Y H:i"|default:"—" }}</td>
-        <td>{{ action.get_action_type_display }}</td>
-        <td>{{ action.confidence|floatformat:2 }}</td>
-        <td class="text-end"><a href="{% url 'web:review_detail' action.id %}" class="btn btn-sm btn-primary">Review</a></td>
-      </tr>
+        <a href="{% url 'web:review_detail' action.id %}" class="tile accent-brand">
+          <p class="tile-title">{{ action.incoming_email.subject|default:"(no subject)" }}</p>
+
+          <div class="tile-meta">
+            <span class="chip chip-brand">{{ action.get_action_type_display }}</span>
+            {% if action.incoming_email.has_attachments %}
+              <span class="chip"><i class="bi bi-paperclip"></i> Attachment</span>
+            {% endif %}
+          </div>
+
+          <div class="tile-meta">
+            <span class="truncate"><i class="bi bi-person-badge"></i> {{ action.incoming_email.outer_sender }}</span>
+          </div>
+          <div class="tile-meta">
+            <span><i class="bi bi-clock"></i> {{ action.incoming_email.received_at|date:"d M Y, H:i"|default:"—" }}</span>
+          </div>
+
+          <div class="tile-actions align-items-center justify-content-between">
+            <span class="confidence" title="Extraction confidence">
+              <span class="confidence-bar">
+                <span class="confidence-fill" style="width: {% widthratio action.confidence 1 100 %}%"></span>
+              </span>
+              {{ action.confidence|floatformat:2 }} confidence
+            </span>
+            <span class="btn btn-sm btn-primary">Review <i class="bi bi-chevron-right"></i></span>
+          </div>
+        </a>
       {% endfor %}
-    </tbody>
-  </table>
-  </div>
+    </div>
+
+    {# ---------- Desktop: table ---------- #}
+    <div class="only-desktop table-wrap">
+      <table class="table table-hover align-middle mb-0">
+        <thead>
+          <tr>
+            <th>Subject</th>
+            <th>Sender</th>
+            <th>Received</th>
+            <th>Proposed action</th>
+            <th>Confidence</th>
+            <th class="text-end"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for action in actions %}
+          <tr>
+            <td class="fw-semibold">
+              {{ action.incoming_email.subject|default:"(no subject)" }}
+              {% if action.incoming_email.has_attachments %}
+                <i class="bi bi-paperclip text-muted ms-1" title="Has attachments"></i>
+              {% endif %}
+            </td>
+            <td class="small">{{ action.incoming_email.outer_sender }}</td>
+            <td class="small tabular">{{ action.incoming_email.received_at|date:"d M Y H:i"|default:"—" }}</td>
+            <td><span class="chip chip-brand">{{ action.get_action_type_display }}</span></td>
+            <td>
+              <span class="confidence">
+                <span class="confidence-bar">
+                  <span class="confidence-fill" style="width: {% widthratio action.confidence 1 100 %}%"></span>
+                </span>
+                {{ action.confidence|floatformat:2 }}
+              </span>
+            </td>
+            <td class="text-end">
+              <a href="{% url 'web:review_detail' action.id %}" class="btn btn-sm btn-primary">Review</a>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
   {% endif %}
 {% endif %}
 {% endblock %}

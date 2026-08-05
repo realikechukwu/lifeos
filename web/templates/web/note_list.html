@@ -1,45 +1,107 @@
 {% extends "base.html" %}
 {% block title %}Notes — Family Assistant{% endblock %}
+
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-3">
-  <h1 class="h3 mb-0">Notes</h1>
-  <a href="{% url 'web:note_create' %}" class="btn btn-primary btn-sm">+ New note</a>
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Notes</h1>
+    <p class="page-sub">Anything worth remembering — jotted by hand or captured from an email.</p>
+  </div>
+  <a href="{% url 'web:note_create' %}" class="btn btn-primary btn-sm d-none d-md-inline-flex">
+    <i class="bi bi-plus-lg me-1"></i> New note
+  </a>
 </div>
 
-<form method="get" class="row row-cols-lg-auto g-2 align-items-center mb-3">
-  <div class="col-12">
-    <input type="text" name="q" class="form-control form-control-sm" placeholder="Search title/body" value="{{ current_q }}">
-  </div>
-  <div class="col-12">
-    <select name="category" class="form-select form-select-sm">
-      <option value="">Any category</option>
-      {% for cat in categories %}
-        <option value="{{ cat }}" {% if cat == current_category %}selected{% endif %}>{{ cat }}</option>
-      {% endfor %}
-    </select>
-  </div>
-  <div class="col-12">
-    <button type="submit" class="btn btn-outline-secondary btn-sm">Filter</button>
-    <a href="{% url 'web:note_list' %}" class="btn btn-link btn-sm">Reset</a>
-  </div>
-</form>
-
-{% if not notes %}
-  <div class="alert alert-secondary">No notes match these filters.</div>
-{% else %}
-<div class="row row-cols-1 row-cols-md-2 g-3">
-  {% for note in notes %}
-  <div class="col">
-    <div class="card h-100">
-      <div class="card-body">
-        <h2 class="h6"><a href="{% url 'web:note_detail' note.id %}">{{ note.title|default:"(untitled)" }}</a></h2>
-        {% if note.category %}<span class="badge bg-secondary">{{ note.category }}</span>{% endif %}
-        <p class="card-text small mt-2">{{ note.body|truncatewords:30 }}</p>
-        <p class="text-muted small mb-0">{{ note.created_at|date:"d M Y" }}{% if note.related_household_member %} · {{ note.related_household_member.name }}{% endif %}</p>
-      </div>
-    </div>
-  </div>
+{% if categories %}
+<div class="chip-row">
+  <a href="{% url 'web:note_list' %}" class="chip-link {% if not current_category and not current_q %}active{% endif %}">All</a>
+  {% for cat in categories %}
+    <a href="?category={{ cat|urlencode }}" class="chip-link {% if cat == current_category %}active{% endif %}">{{ cat }}</a>
   {% endfor %}
 </div>
 {% endif %}
+
+<div class="filter-bar">
+  <button class="filter-toggle" type="button" data-bs-toggle="collapse"
+          data-bs-target="#noteFilters" aria-expanded="false" aria-controls="noteFilters">
+    <span><i class="bi bi-search me-1"></i> Search notes</span>
+    <i class="bi bi-chevron-down chev"></i>
+  </button>
+
+  <div class="collapse" id="noteFilters">
+    <div class="filter-body">
+      <form method="get" class="row g-2">
+        <div class="col-12">
+          <div class="search-wrap">
+            <i class="bi bi-search"></i>
+            <input type="search" name="q" class="form-control form-control-sm"
+                   placeholder="Search title or body" value="{{ current_q }}">
+          </div>
+        </div>
+        <div class="col-12 col-md-5">
+          <select name="category" class="form-select form-select-sm" aria-label="Category">
+            <option value="">Any category</option>
+            {% for cat in categories %}
+              <option value="{{ cat }}" {% if cat == current_category %}selected{% endif %}>{{ cat }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-12 d-flex gap-2 mt-1">
+          <button type="submit" class="btn btn-primary btn-sm flex-fill flex-md-grow-0">Search</button>
+          <a href="{% url 'web:note_list' %}" class="btn btn-outline-secondary btn-sm">Reset</a>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+{% if not notes %}
+  <div class="empty">
+    <div class="empty-icon"><i class="bi bi-journal-text"></i></div>
+    <div class="empty-title">No notes yet</div>
+    <p class="empty-text">Nothing matches these filters. Reset them, or write your first note.</p>
+    <a href="{% url 'web:note_create' %}" class="btn btn-primary btn-sm"><i class="bi bi-plus-lg"></i> New note</a>
+  </div>
+{% else %}
+  <div class="row row-cols-1 row-cols-md-2 g-2 g-md-3">
+    {% for note in notes %}
+      <div class="col">
+        <a href="{% url 'web:note_detail' note.id %}" class="tile h-100 mb-0">
+          <div class="d-flex align-items-start justify-content-between gap-2">
+            <p class="tile-title">{{ note.title|default:"(untitled)" }}</p>
+            {% if note.category %}<span class="chip chip-brand">{{ note.category }}</span>{% endif %}
+          </div>
+
+          {% if note.body %}<p class="tile-body">{{ note.body|truncatewords:28 }}</p>{% endif %}
+
+          <div class="tile-meta">
+            <span><i class="bi bi-clock"></i> {{ note.created_at|date:"d M Y" }}</span>
+            {% if note.related_household_member %}
+              <span class="sep"><i class="bi bi-person"></i> {{ note.related_household_member.name }}</span>
+            {% endif %}
+            {% if note.source_email %}
+              <span class="sep"><i class="bi bi-envelope"></i> From email</span>
+            {% endif %}
+          </div>
+        </a>
+      </div>
+    {% endfor %}
+  </div>
+{% endif %}
+{% endblock %}
+
+{% block fab %}
+<a href="{% url 'web:note_create' %}" class="fab" aria-label="New note"><i class="bi bi-plus-lg"></i></a>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+  document.addEventListener("DOMContentLoaded", function () {
+    var params = new URLSearchParams(window.location.search);
+    if (params.get("q")) {
+      var panel = document.getElementById("noteFilters");
+      if (panel) new bootstrap.Collapse(panel, { toggle: true });
+    }
+  });
+</script>
 {% endblock %}

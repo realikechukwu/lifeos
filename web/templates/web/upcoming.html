@@ -1,42 +1,84 @@
 {% extends "base.html" %}
 {% block title %}Upcoming — Family Assistant{% endblock %}
+
 {% block content %}
-<h1 class="h3 mb-3">Upcoming</h1>
-<p class="text-muted">
-  Calendar events and task due dates in the next 30 days, overdue tasks, pending reminders,
-  and anything waiting for review — most urgent first.
-</p>
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Upcoming</h1>
+    <p class="page-sub">
+      The next 30 days of events and due dates, anything overdue, pending reminders,
+      and items waiting for review — most urgent first.
+    </p>
+  </div>
+</div>
+
+<div class="chip-row">
+  <a href="{% url 'web:calendar' %}" class="chip-link"><i class="bi bi-calendar3"></i> Calendar</a>
+  <a href="{% url 'web:task_list' %}?overdue=1" class="chip-link"><i class="bi bi-exclamation-triangle"></i> Overdue tasks</a>
+  <a href="{% url 'web:task_create' %}" class="chip-link"><i class="bi bi-plus-lg"></i> New task</a>
+  <a href="{% url 'web:note_create' %}" class="chip-link"><i class="bi bi-pencil"></i> New note</a>
+  {% if pending_review_count %}
+    <a href="{% url 'web:review_list' %}" class="chip-link"><i class="bi bi-inbox"></i> Review ({{ pending_review_count }})</a>
+  {% endif %}
+</div>
 
 {% if not items %}
-  <div class="alert alert-secondary">Nothing upcoming right now.</div>
+  <div class="empty">
+    <div class="empty-icon"><i class="bi bi-check2-circle"></i></div>
+    <div class="empty-title">You're all clear</div>
+    <p class="empty-text">Nothing is due, scheduled, or waiting on you right now.</p>
+    <a href="{% url 'web:task_create' %}" class="btn btn-primary btn-sm">
+      <i class="bi bi-plus-lg"></i> Add a task
+    </a>
+  </div>
 {% else %}
-  <div class="list-group-flex">
+  <div class="stack">
     {% for item in items %}
-      <div class="feed-item kind-{{ item.kind }}">
-        <div class="d-flex justify-content-between align-items-start flex-wrap">
-          <div>
-            <div class="kind-label">{{ item.kind_label }}{% if item.is_overdue %} · overdue{% endif %}</div>
-            <div class="fw-semibold">{{ item.title }}</div>
-            <div class="small text-muted">
-              {% if item.when_label %}{{ item.when_label }}{% endif %}
-              {% if item.assignee %} · {{ item.assignee }}{% endif %}
-              {% if item.location %} · {{ item.location }}{% endif %}
+      <div class="tile {% if item.is_overdue %}accent-danger{% elif item.kind == 'calendar_event' %}accent-info{% elif item.kind == 'reminder' %}accent-ok{% elif item.kind == 'review' %}accent-brand{% else %}accent-warn{% endif %}">
+        <div class="tile-row">
+          <span class="feed-icon kind-{{ item.kind }}" aria-hidden="true">
+            {% if item.kind == 'calendar_event' %}<i class="bi bi-calendar-event"></i>
+            {% elif item.kind == 'reminder' %}<i class="bi bi-bell"></i>
+            {% elif item.kind == 'review' %}<i class="bi bi-inbox"></i>
+            {% elif item.kind == 'task_overdue' %}<i class="bi bi-exclamation-triangle"></i>
+            {% else %}<i class="bi bi-check2-square"></i>{% endif %}
+          </span>
+
+          <div class="tile-main">
+            <div class="d-flex align-items-start justify-content-between gap-2">
+              <p class="tile-title">{{ item.title }}</p>
+              <span class="chip {% if item.is_overdue %}chip-danger{% elif item.kind == 'review' %}chip-brand{% endif %}">
+                {% if item.is_overdue %}Overdue{% else %}{{ item.status }}{% endif %}
+              </span>
             </div>
-          </div>
-          <div class="text-end small">
-            <span class="badge {% if item.is_overdue %}bg-danger{% elif item.kind == 'review' %}bg-purple bg-opacity-75 text-white{% else %}bg-secondary{% endif %}">
-              {{ item.status }}
-            </span>
-            <div class="mt-1">
-              {% if item.detail_url %}<a href="{{ item.detail_url }}">View</a>{% endif %}
-              {% for label, url in item.extra_links %}
-                {% if item.detail_url %} · {% endif %}<a href="{{ url }}" target="_blank" rel="noopener">{{ label }}</a>
-              {% endfor %}
+
+            <div class="tile-meta">
+              <span>{{ item.kind_label }}</span>
+              {% if item.when_label %}<span class="sep">{{ item.when_label }}</span>{% endif %}
+              {% if item.assignee %}<span class="sep"><i class="bi bi-person"></i> {{ item.assignee }}</span>{% endif %}
+              {% if item.location %}<span class="sep"><i class="bi bi-geo-alt"></i> {{ item.location }}</span>{% endif %}
             </div>
+
+            {% if item.detail_url or item.extra_links %}
+              <div class="tile-actions">
+                {% if item.detail_url %}
+                  <a href="{{ item.detail_url }}" class="btn btn-sm btn-outline-primary">View</a>
+                {% endif %}
+                {% for label, url in item.extra_links %}
+                  <a href="{{ url }}" target="_blank" rel="noopener" class="btn btn-sm btn-outline-secondary">
+                    <i class="bi bi-box-arrow-up-right"></i> {{ label }}
+                  </a>
+                {% endfor %}
+              </div>
+            {% endif %}
           </div>
         </div>
       </div>
     {% endfor %}
   </div>
 {% endif %}
+{% endblock %}
+
+{% block fab %}
+<a href="{% url 'web:task_create' %}" class="fab" aria-label="New task"><i class="bi bi-plus-lg"></i></a>
 {% endblock %}

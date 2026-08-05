@@ -1,79 +1,138 @@
 {% extends "base.html" %}
 {% block title %}Review action — Family Assistant{% endblock %}
+
 {% block content %}
-<h1 class="h3 mb-3">Review: {{ action.get_action_type_display }}</h1>
+<a href="{% url 'web:review_list' %}" class="back-link mb-3">
+  <i class="bi bi-arrow-left"></i> Review queue
+</a>
+
+<div class="page-head">
+  <div>
+    <h1 class="page-title">{{ action.get_action_type_display }}</h1>
+    <p class="page-sub">Check the extracted details, correct anything wrong, then approve or reject.</p>
+  </div>
+  <span class="chip chip-warn">{{ action.get_status_display }}</span>
+</div>
 
 <div class="card mb-3">
-  <div class="card-header">Source email</div>
+  <div class="card-header"><i class="bi bi-envelope me-1"></i> Source email</div>
   <div class="card-body">
-    <dl class="row mb-0">
-      <dt class="col-sm-3">Subject</dt><dd class="col-sm-9">{{ action.incoming_email.subject|default:"(no subject)" }}</dd>
-      <dt class="col-sm-3">Outer sender</dt><dd class="col-sm-9">{{ action.incoming_email.outer_sender }}</dd>
-      <dt class="col-sm-3">Received</dt><dd class="col-sm-9">{{ action.incoming_email.received_at|date:"d M Y H:i"|default:"—" }}</dd>
-      <dt class="col-sm-3">Status</dt><dd class="col-sm-9"><span class="badge bg-warning text-dark">{{ action.get_status_display }}</span></dd>
-    </dl>
+    <div class="kv">
+      <div class="kv-row">
+        <div class="kv-key">Subject</div>
+        <div class="kv-val">{{ action.incoming_email.subject|default:"(no subject)" }}</div>
+      </div>
+      <div class="kv-row">
+        <div class="kv-key">Sender</div>
+        <div class="kv-val">{{ action.incoming_email.outer_sender }}</div>
+      </div>
+      <div class="kv-row">
+        <div class="kv-key">Received</div>
+        <div class="kv-val">{{ action.incoming_email.received_at|date:"d M Y, H:i"|default:"—" }}</div>
+      </div>
+      <div class="kv-row">
+        <div class="kv-key">Confidence</div>
+        <div class="kv-val">
+          <span class="confidence">
+            <span class="confidence-bar">
+              <span class="confidence-fill" style="width: {% widthratio action.confidence 1 100 %}%"></span>
+            </span>
+            {{ action.confidence|floatformat:2 }}
+          </span>
+        </div>
+      </div>
+    </div>
+
     {% if action.incoming_email.has_attachments %}
-      <div class="alert alert-warning mt-3 mb-0">
-        ⚠ This email has attachment(s). Attachment contents are not parsed — check the original email
-        (via the Django admin link below) if the appointment details might be inside an attachment.
+      <div class="alert alert-warning mt-3 mb-0 d-flex align-items-start gap-2">
+        <i class="bi bi-paperclip mt-1"></i>
+        <div>
+          This email has attachments, and their contents are not parsed. If the details might be
+          inside an attachment, open the original in Django admin before approving.
+        </div>
       </div>
     {% endif %}
   </div>
 </div>
 
 {% if action.missing_fields %}
-<div class="alert alert-warning">
-  <strong>Missing fields:</strong> {{ action.missing_fields|join:", " }}
-</div>
+  <div class="alert alert-warning d-flex align-items-start gap-2">
+    <i class="bi bi-exclamation-triangle-fill mt-1"></i>
+    <div><strong>Missing fields:</strong> {{ action.missing_fields|join:", " }}</div>
+  </div>
 {% endif %}
 
 {% if action.ambiguity_notes %}
-<div class="alert alert-warning">
-  <strong>Ambiguity notes:</strong>
-  <ul class="mb-0">
-    {% for note in action.ambiguity_notes %}<li>{{ note }}</li>{% endfor %}
-  </ul>
-</div>
+  <div class="alert alert-warning d-flex align-items-start gap-2">
+    <i class="bi bi-question-circle-fill mt-1"></i>
+    <div>
+      <strong>Ambiguity notes</strong>
+      <ul class="mb-0 mt-1 ps-3">
+        {% for note in action.ambiguity_notes %}<li>{{ note }}</li>{% endfor %}
+      </ul>
+    </div>
+  </div>
 {% endif %}
 
 {% if action.evidence %}
-<div class="card mb-3">
-  <div class="card-header">Supporting evidence</div>
-  <ul class="list-group list-group-flush">
-    {% for item in action.evidence %}<li class="list-group-item small">{{ item }}</li>{% endfor %}
-  </ul>
-</div>
+  <div class="card mb-3">
+    <div class="card-header"><i class="bi bi-search me-1"></i> Supporting evidence</div>
+    <ul class="list-group list-group-flush">
+      {% for item in action.evidence %}
+        <li class="list-group-item small">{{ item }}</li>
+      {% endfor %}
+    </ul>
+  </div>
 {% endif %}
 
 <div class="card mb-3">
-  <div class="card-header">Extracted fields (editable)</div>
+  <div class="card-header"><i class="bi bi-pencil-square me-1"></i> Extracted fields — editable</div>
   <div class="card-body">
-    <form method="post" id="reviewForm">
+    <form method="post" id="reviewForm" novalidate>
       {% csrf_token %}
+
+      {% if form.non_field_errors %}
+        <div class="alert alert-danger">{{ form.non_field_errors|join:", " }}</div>
+      {% endif %}
+
       <div class="row">
         {% for field in form %}
-          <div class="col-md-6 mb-3">
-            <label class="form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
-            {{ field }}
-            {% if field.errors %}<div class="text-danger small">{{ field.errors|join:", " }}</div>{% endif %}
+          <div class="col-12 col-md-6">
+            <div class="field">
+              <label class="form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+              {{ field }}
+              {% if field.errors %}<div class="field-error">{{ field.errors|join:", " }}</div>{% endif %}
+              {% if field.help_text %}<div class="form-text">{{ field.help_text }}</div>{% endif %}
+            </div>
           </div>
         {% endfor %}
       </div>
 
-      <div class="d-flex gap-2 mt-3 flex-wrap">
-        <button type="submit" name="intent" value="save" class="btn btn-outline-secondary">Save changes</button>
+      <div class="form-actions is-sticky flex-wrap">
         {% if action.status != "executed" %}
-        <button type="submit" name="intent" value="approve" class="btn btn-success">Approve &amp; execute</button>
-        <button type="submit" name="intent" value="reject" class="btn btn-danger"
-                onclick="return confirm('Reject this action? This cannot be undone.');">Reject</button>
+          <button type="submit" name="intent" value="approve" class="btn btn-success">
+            <i class="bi bi-check2-circle me-1"></i> Approve
+          </button>
+        {% endif %}
+        <button type="submit" name="intent" value="save" class="btn btn-outline-secondary">
+          Save changes
+        </button>
+        {% if action.status != "executed" %}
+          <button type="submit" name="intent" value="reject" class="btn btn-outline-danger"
+                  onclick="return confirm('Reject this action? This cannot be undone.');">
+            Reject
+          </button>
         {% endif %}
       </div>
     </form>
   </div>
 </div>
 
-<a href="{% url 'admin:core_parsedaction_change' action.id %}" class="btn btn-outline-dark btn-sm" target="_blank" rel="noopener">
-  Open in Django admin
-</a>
-<a href="{% url 'web:review_list' %}" class="btn btn-link btn-sm">&larr; Back to review list</a>
+<div class="d-flex flex-wrap gap-2">
+  <a href="{% url 'admin:core_parsedaction_change' action.id %}" class="btn btn-outline-secondary btn-sm"
+     target="_blank" rel="noopener">
+    <i class="bi bi-box-arrow-up-right"></i> Open in Django admin
+  </a>
+  <a href="{% url 'web:review_list' %}" class="btn btn-link btn-sm">Back to review list</a>
+</div>
 {% endblock %}
