@@ -176,10 +176,17 @@ environment variable (see `.env.example` and `DEPLOY_ORACLE.md`).
 Production refuses to start with a blank/default secret key, missing
 `DJANGO_ALLOWED_HOSTS`, or missing `DATABASE_URL`.
 
-See [`DEPLOY_ORACLE.md`](DEPLOY_ORACLE.md) for the full Oracle + Nginx +
-Gunicorn + systemd + Supabase deployment guide (nothing in that guide is run
+See [`DEPLOY_ORACLE.md`](DEPLOY_ORACLE.md) for the full Oracle + Gunicorn +
+systemd + Supabase deployment guide (nothing in that guide is run
 automatically — you run each step yourself), and `deploy/` for the systemd
-units, Nginx example config, Gunicorn config, and update script.
+units, Gunicorn config, and update script. The reverse proxy step has two
+documented paths: a dedicated Nginx + Certbot (`deploy/nginx/`) if this app
+owns ports 80/443 outright, or — if another app on the same box already
+runs a reverse proxy (e.g. Caddy in Docker) that owns those ports — adding
+one new site entry to that existing proxy instead
+(`deploy/caddy/lifeassistant-site.Caddyfile.example`), with Gunicorn bound
+to a host-only TCP port. Either way this app keeps its own dedicated Linux
+user, venv, `.env`, systemd units, and database.
 
 `GET /health/` returns a small JSON status (and, optionally, a lightweight
 DB check) — never calls Gmail, Calendar, or OpenAI. `GET /healthz/` is the

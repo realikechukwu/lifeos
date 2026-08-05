@@ -1,4 +1,11 @@
-# Example Nginx site config for the Family Assistant.
+# Example Nginx site config for the Family Assistant — DEPLOY_ORACLE.md
+# "Path A" (dedicated Nginx, this app owns ports 80/443 on its own).
+#
+# If ports 80/443 are already owned by another app's reverse proxy on this
+# box (e.g. a Caddy-in-Docker setup for a different app), do NOT install
+# this file — use "Path B" in DEPLOY_ORACLE.md step 13 instead, which adds
+# a site entry to that existing proxy and skips Nginx/Certbot entirely. See
+# deploy/caddy/lifeassistant-site.Caddyfile.example for that path.
 #
 # Copy to /etc/nginx/sites-available/lifeassistant.conf, edit the
 # placeholders, symlink into sites-enabled, then `nginx -t && systemctl

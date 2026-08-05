@@ -12,8 +12,16 @@ rather bind to localhost:8000.
 import multiprocessing
 import os
 
-# Unix socket by default — Nginx talks to Gunicorn over this, never over the
-# public network. Set GUNICORN_BIND=127.0.0.1:8000 to use a TCP port instead.
+# Unix socket by default — a dedicated Nginx (DEPLOY_ORACLE.md "Path A")
+# talks to Gunicorn over this, never over the public network.
+#
+# If this box already has another app's reverse proxy (e.g. Caddy in
+# Docker) owning ports 80/443 ("Path B"), that proxy container can't reach
+# a Unix socket on the host by default — set GUNICORN_BIND=127.0.0.1:<port>
+# in lifeassistant's .env instead, matching the port used in
+# deploy/caddy/lifeassistant-site.Caddyfile.example. Still host-only, never
+# exposed on the public network directly — the shared proxy is still what's
+# actually reachable from outside.
 bind = os.environ.get("GUNICORN_BIND", "unix:/run/lifeassistant/gunicorn.sock")
 
 # A small family app: 2-4 workers is plenty. (2 x CPU) + 1 is the usual

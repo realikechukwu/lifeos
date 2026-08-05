@@ -1,0 +1,29 @@
+# Site block to ADD to an *existing* Caddyfile that already fronts another
+# app on this box (Path B in DEPLOY_ORACLE.md — see step 13 there for the
+# full procedure). Append this block; do not replace what's already in that
+# file. This is not a standalone Caddyfile and is never loaded on its own.
+#
+# Fill in:
+#   <YOUR_DOMAIN>      — e.g. lifeos.example.com — must already have a DNS
+#                         A record pointing at this server's public IP.
+#   <LOCAL_APP_PORT>    — must match GUNICORN_BIND=127.0.0.1:<LOCAL_APP_PORT>
+#                         in lifeassistant's own .env.
+#
+# Requires the existing reverse-proxy service to have this added to its
+# compose.yaml (see DEPLOY_ORACLE.md step 13, Path B, item 2):
+#   extra_hosts:
+#     - "host.docker.internal:host-gateway"
+
+<YOUR_DOMAIN> {
+    encode zstd gzip
+    reverse_proxy host.docker.internal:<LOCAL_APP_PORT>
+
+    header {
+        -Server
+    }
+
+    log {
+        output stdout
+        format console
+    }
+}

@@ -10,9 +10,14 @@ WorkingDirectory=<PROJECT_PATH>
 
 # RuntimeDirectory creates /run/lifeassistant (owned by the user above) on
 # start and removes it on stop — matches deploy/gunicorn.conf.py's default
-# unix socket path. Nginx must be able to read/write this socket; if Nginx
-# runs as a different user/group, add that user to the Linux group above,
-# or switch GUNICORN_BIND to a localhost TCP port instead.
+# unix socket path (DEPLOY_ORACLE.md "Path A": dedicated Nginx). Nginx must
+# be able to read/write this socket; if Nginx runs as a different
+# user/group, add that user to the Linux group above.
+#
+# "Path B" (an existing shared reverse proxy, e.g. Caddy in Docker, already
+# owns 80/443): set GUNICORN_BIND=127.0.0.1:<port> in the env file below
+# instead — Gunicorn then binds a TCP port and this directive is simply
+# unused (harmless to leave in place).
 RuntimeDirectory=lifeassistant
 RuntimeDirectoryMode=0750
 

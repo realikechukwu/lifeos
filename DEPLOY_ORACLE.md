@@ -1,13 +1,30 @@
 # Deploying to Oracle (Phase 3)
 
 Exact-but-editable instructions for putting the Family Assistant on an
-Oracle Cloud (or any similar Linux) VM, fronted by Nginx with HTTPS, using
-Supabase Postgres as the database. Every `<PLACEHOLDER>` is something you
-choose — this guide does not invent a domain, username, or path for you.
+Oracle Cloud (or any similar Linux) VM, fronted by HTTPS, using Supabase
+Postgres as the database. Every `<PLACEHOLDER>` is something you choose —
+this guide does not invent a domain, username, or path for you, and no real
+domain/IP/secret is committed anywhere in this repo.
 
 This guide is **not executed for you**. Nothing here was run against your
 Oracle instance or Supabase project during this coding session — you SSH in
 and run each step yourself.
+
+Steps 1–12 and 16–20 are identical either way. Step 13 (the reverse proxy)
+has two paths — pick the one that matches your server:
+
+- **Path A — dedicated Nginx + Certbot**: this app is the only thing on the
+  box, or at least the only thing on ports 80/443. Nginx binds 80/443
+  directly and Certbot manages the certificate.
+- **Path B — an existing shared reverse proxy already owns ports 80/443**
+  (e.g. another app on the same box already runs Caddy in Docker, publishing
+  `80:80`/`443:443`). Skip Nginx and Certbot entirely; add one new site
+  entry to the *existing* reverse proxy instead, and bind Gunicorn to a
+  host-only TCP port so that proxy can reach it. lifeassistant still gets
+  its own dedicated Linux user, project directory, venv, `.env`, systemd
+  units, Gunicorn process, and database — completely separate from whatever
+  else is on the box. The only thing shared is the box itself and that one
+  reverse-proxy container, which just routes by hostname.
 
 Placeholders used throughout:
 
@@ -17,6 +34,12 @@ Placeholders used throughout:
 - `<ENV_FILE_PATH>` — usually `<PROJECT_PATH>/.env`
 - `<GIT_REMOTE_URL>` — your repository's clone URL
 - `<YOUR_DOMAIN>` — the domain you point at this server, e.g. `family.example.com`
+- *(Path B only)* `<SHARED_PROXY_COMPOSE_DIR>` — where the existing app's
+  `compose.yaml`/`docker-compose.yml` and Caddyfile live, e.g.
+  `/opt/<other-app>/deploy/oracle`
+- *(Path B only)* `<LOCAL_APP_PORT>` — a host-only TCP port for Gunicorn to
+  bind, e.g. `8001` — pick something not already in use
+  (`sudo ss -tlnp` to check)
 
 ---
 
@@ -51,10 +74,17 @@ python -m pip install --upgrade pip
 
 ## 4. Install system packages
 
+**Path A (dedicated Nginx):**
 ```bash
 sudo apt update
 sudo apt install -y python3.12 python3.12-venv build-essential libpq-dev \
     nginx certbot python3-certbot-nginx git curl
+```
+
+**Path B (existing shared reverse proxy — no Nginx/Certbot needed here):**
+```bash
+sudo apt update
+sudo apt install -y python3.12 python3.12-venv build-essential libpq-dev git curl
 ```
 
 (`libpq-dev` is needed to build `psycopg`; adjust package names if you are
@@ -85,6 +115,9 @@ for the full list. At minimum for production you need:
 - `OPENAI_API_KEY`, `OPENAI_MODEL`
 - `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` (or `GOOGLE_CLIENT_SECRETS_FILE`), `GOOGLE_CALENDAR_ID`
 - `AUTHORISED_EMAIL_IKE`, `AUTHORISED_EMAIL_WIFE`
+- **Path B only**: `GUNICORN_BIND=127.0.0.1:<LOCAL_APP_PORT>` — makes
+  Gunicorn bind a host-only TCP port instead of the default Unix socket, so
+  the existing shared reverse proxy can reach it (see step 13, Path B).
 
 `DJANGO_SETTINGS_MODULE=config.settings.production` is set in the systemd
 units' `Environment=` line (see step 11), **not** in `.env` — it has to be
@@ -143,8 +176,11 @@ should approve pending reviews).
 DJANGO_SETTINGS_MODULE=config.settings.production python manage.py collectstatic --noinput
 ```
 
-This writes into `<PROJECT_PATH>/staticfiles/`, which the example Nginx
-config serves directly (see step 13).
+This writes into `<PROJECT_PATH>/staticfiles/`. Path A's example Nginx
+config serves these directly (see step 13); Path B serves them through
+Gunicorn itself via WhiteNoise (already configured in
+`config/settings/production.py`) — no separate static file serving needed
+there.
 
 ## 11. Installing the Gunicorn systemd service
 
@@ -178,7 +214,9 @@ a second instance of a unit that's already running, and both underlying
 management commands are themselves idempotent/safe-to-overlap (see the
 comments in each `.service` file).
 
-## 13. Configuring Nginx
+## 13. Configuring the reverse proxy
+
+### Path A — dedicated Nginx
 
 ```bash
 sudo cp deploy/nginx/lifeassistant.conf.example /etc/nginx/sites-available/lifeassistant.conf
@@ -187,6 +225,60 @@ sudo ln -s /etc/nginx/sites-available/lifeassistant.conf /etc/nginx/sites-enable
 sudo nginx -t
 sudo systemctl reload nginx
 ```
+
+Continue to step 14 (DNS) then step 15 (Certbot).
+
+### Path B — an existing shared reverse proxy already owns 80/443
+
+This applies when another app on the same box already runs a reverse proxy
+(commonly Caddy) in Docker, with `ports: ["80:80", "443:443"]` published to
+the host. A container in that state can't reach anything bound to the
+*host's* `127.0.0.1` by default — Docker's default bridge network isolates
+container-localhost from host-localhost — so two small, additive edits to
+the **existing app's** deploy config are needed. Nothing about the existing
+app's own site/service is touched.
+
+1. **Confirm the shape of what's already there** (adjust names to match):
+   ```bash
+   docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Ports}}'
+   cat <SHARED_PROXY_COMPOSE_DIR>/Caddyfile
+   cat <SHARED_PROXY_COMPOSE_DIR>/compose.yaml   # or docker-compose.yml
+   ```
+   You're looking for the reverse-proxy service's `ports:` mapping 80/443
+   to the host, and whether it already has `network_mode: host` or an
+   `extra_hosts: host.docker.internal` entry (if it already does, skip
+   straight to the Caddyfile edit below).
+
+2. **Let the proxy container reach the host.** Add this under the existing
+   reverse-proxy service in its `compose.yaml`:
+   ```yaml
+     caddy:
+       # ...existing config...
+       extra_hosts:
+         - "host.docker.internal:host-gateway"
+   ```
+
+3. **Add a new site entry** to the existing Caddyfile — a template is at
+   [`deploy/caddy/lifeassistant-site.Caddyfile.example`](deploy/caddy/lifeassistant-site.Caddyfile.example).
+   Append its contents (with `<YOUR_DOMAIN>` and `<LOCAL_APP_PORT>` filled
+   in) to the *existing* Caddyfile, alongside — not replacing — whatever
+   site block is already there for the other app.
+
+4. **Recreate just the proxy container** to pick up both changes:
+   ```bash
+   cd <SHARED_PROXY_COMPOSE_DIR>
+   docker compose up -d caddy   # substitute the actual service name if different
+   ```
+
+5. Set `GUNICORN_BIND=127.0.0.1:<LOCAL_APP_PORT>` in lifeassistant's own
+   `.env` (see step 6) — **not** in the other app's `.env`. This makes
+   `deploy/gunicorn.conf.py` bind a host-only TCP port instead of its
+   default Unix socket, matching what the Caddyfile entry above proxies to.
+
+HTTPS is automatic here — the existing Caddy instance issues and renews a
+Let's Encrypt certificate for the new hostname the first time it sees a
+request for it, the same way it already does for its own site. **Skip
+step 15 (Certbot) entirely** and go straight to step 16.
 
 ## 14. Configuring DNS
 
@@ -198,6 +290,9 @@ Wait for DNS to propagate (`dig <YOUR_DOMAIN>` should return the server IP)
 before running Certbot in the next step.
 
 ## 15. Adding HTTPS with Certbot
+
+**Path A only** — if you're on Path B, the existing reverse proxy already
+handles HTTPS automatically; skip this step.
 
 ```bash
 sudo certbot --nginx -d <YOUR_DOMAIN>
@@ -232,7 +327,12 @@ sudo systemctl status lifeassistant-web --no-pager
 sudo journalctl -u lifeassistant-web -f
 sudo journalctl -u lifeassistant-gmail.service -n 50 --no-pager
 sudo journalctl -u lifeassistant-reminders.service -n 50 --no-pager
+
+# Path A only:
 sudo tail -f /var/log/nginx/error.log
+
+# Path B only — the shared proxy's own logs:
+docker logs -f <shared-proxy-container-name>
 ```
 
 ## 18. Testing `/health/`
