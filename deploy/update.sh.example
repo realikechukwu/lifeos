@@ -35,6 +35,16 @@ WEB_SERVICE="lifeassistant-web"
 # reverse proxy -> TLS -> DNS), not just the raw app process.
 HEALTH_URL="https://<YOUR_DOMAIN>/health/"
 
+# manage.py defaults to config.settings.development (see manage.py), and .env
+# cannot carry this — config/settings/base.py calls load_dotenv() long after
+# Django has already resolved the settings module. So every manage.py call
+# below has to be told explicitly, or migrate and collectstatic silently run
+# against the wrong settings. Getting this wrong is not loud: collectstatic
+# under development settings copies files without hashing them or rewriting
+# staticfiles.json, and Gunicorn then serves whatever the *old* manifest still
+# points at — an old stylesheet, with no error anywhere.
+export DJANGO_SETTINGS_MODULE=config.settings.production
+
 # -----------------------------------------------------------------------------
 
 cd "$PROJECT_PATH"
@@ -56,6 +66,10 @@ python manage.py migrate --noinput
 
 echo "==> Collecting static files..."
 python manage.py collectstatic --noinput
+
+# Aborts the deploy (set -e) rather than restarting onto a stale manifest.
+echo "==> Verifying the static manifest..."
+python manage.py check_static_manifest
 
 echo "==> Restarting ${WEB_SERVICE}..."
 sudo systemctl restart "${WEB_SERVICE}"

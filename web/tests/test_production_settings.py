@@ -11,8 +11,23 @@ from django.test import SimpleTestCase
 
 CHECK_CODE = "import django; django.setup()"
 
+# Static files must be served through a *manifest* storage. Without one,
+# collectstatic copies files into STATIC_ROOT without rehashing them or
+# rewriting staticfiles.json, so {% static %} keeps resolving to whatever the
+# previous manifest recorded — the app serves a stale stylesheet and nothing
+# errors. Reading manifest_name off the resolved storage (rather than just
+# string-matching the setting) proves the backend imports and really is one.
+MANIFEST_CHECK_CODE = """
+import django
+django.setup()
+from django.conf import settings
+from django.contrib.staticfiles.storage import staticfiles_storage
+print(settings.STORAGES["staticfiles"]["BACKEND"])
+print(staticfiles_storage.manifest_name)
+"""
 
-def _run_with_env(extra_env: dict) -> subprocess.CompletedProcess:
+
+def _run_with_env(extra_env: dict, code: str = CHECK_CODE) -> subprocess.CompletedProcess:
     env = os.environ.copy()
     env.update({
         "DJANGO_SETTINGS_MODULE": "config.settings.production",
@@ -22,7 +37,7 @@ def _run_with_env(extra_env: dict) -> subprocess.CompletedProcess:
     })
     env.update(extra_env)
     return subprocess.run(
-        [sys.executable, "-c", CHECK_CODE], env=env, capture_output=True, text=True, timeout=30,
+        [sys.executable, "-c", code], env=env, capture_output=True, text=True, timeout=30,
     )
 
 
@@ -53,3 +68,11 @@ class ProductionSettingsTests(SimpleTestCase):
     def test_starts_with_all_required_settings_present(self):
         result = _run_with_env({})
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_static_files_use_a_hashing_manifest_storage(self):
+        result = _run_with_env({}, code=MANIFEST_CHECK_CODE)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            "whitenoise.storage.CompressedManifestStaticFilesStorage", result.stdout
+        )
+        self.assertIn("staticfiles.json", result.stdout)

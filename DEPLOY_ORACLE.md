@@ -424,6 +424,20 @@ nano update.sh   # fill in the placeholders
 ./update.sh
 ```
 
+> **Your `update.sh` is a copy, and `git pull` will never update it.** When
+> `deploy/update.sh.example` changes in the repo, the running server keeps the
+> old copy until you re-run the `cp` above and re-fill the placeholders. This
+> has already bitten this project twice: a health-check fix and, worse, the
+> missing `export DJANGO_SETTINGS_MODULE=config.settings.production` that made
+> every deploy collect static files under *development* settings — shipping a
+> whole UI redesign that never appeared, because `staticfiles.json` was never
+> rebuilt and `{% static %}` kept resolving to the previous stylesheet. After
+> pulling a change to the example, diff the two before assuming you're current:
+>
+> ```bash
+> diff deploy/update.sh.example update.sh
+> ```
+
 ### Continuous deployment (optional): auto-deploy on push via GitHub Actions
 
 By default, nothing about this deployment is automatic — a `git push` does
