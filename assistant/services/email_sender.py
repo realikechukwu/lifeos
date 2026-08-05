@@ -23,6 +23,32 @@ def _format_date_short(d) -> str:
     return f"{d.day} {d.strftime('%B')}"
 
 
+# Maps ParsedAction.missing_fields entries to a plain-English noun phrase.
+# start_time/end_time collapse to the same word so "the time" isn't repeated.
+_MISSING_FIELD_WORDS = {
+    "title": "title",
+    "appointment_date": "date",
+    "start_time": "time",
+    "end_time": "time",
+}
+
+
+def _describe_missing_details(parsed_action: ParsedAction) -> str:
+    """Best-effort plain-English description of what was unclear, e.g. 'the
+    time' or 'the date and location'. Falls back to a generic phrase when
+    the specifics aren't in a field we recognise."""
+    words = []
+    for field in parsed_action.missing_fields or []:
+        word = _MISSING_FIELD_WORDS.get(field)
+        if word and word not in words:
+            words.append(word)
+    if not words:
+        return "all the details"
+    if len(words) == 1:
+        return f"the {words[0]}"
+    return "the " + " and ".join(words)
+
+
 def build_confirmation_body(outcome: str, parsed_action: ParsedAction | None = None) -> str:
     """outcome is one of: 'created', 'pending_review', 'attachment_review', 'unsupported'."""
 
@@ -42,9 +68,10 @@ def build_confirmation_body(outcome: str, parsed_action: ParsedAction | None = N
     if outcome == "pending_review":
         if parsed_action is not None and parsed_action.appointment_date:
             date_str = _format_date_short(parsed_action.appointment_date)
+            missing_desc = _describe_missing_details(parsed_action)
             return (
                 f"I found an appointment for {date_str}, but I could not confidently identify "
-                "all the details. I saved it for review and did not add it to the calendar."
+                f"{missing_desc}. I saved it for review and did not add it to the calendar."
             )
         return (
             "I found a possible appointment in this email, but I could not confidently identify "

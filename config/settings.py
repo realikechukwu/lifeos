@@ -3,6 +3,7 @@ Django settings for the Family Email Assistant (Phase 1).
 """
 
 import os
+import sys
 from pathlib import Path
 
 import dj_database_url
@@ -91,6 +92,15 @@ else:
             "ENGINE": "django.db.backends.sqlite3",
             "NAME": BASE_DIR / "db.sqlite3",
         }
+    }
+
+# Automated tests always run against in-memory SQLite, even if DATABASE_URL
+# points at Supabase — keeps the suite fast, hermetic, and never touching
+# the live project (matches "never make live calls during automated tests").
+if "test" in sys.argv:
+    DATABASES["default"] = {
+        "ENGINE": "django.db.backends.sqlite3",
+        "NAME": ":memory:",
     }
 
 

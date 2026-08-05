@@ -8,3 +8,9 @@ db.sqlite3
 .DS_Store
 staticfiles/
 client_secret*.json
+
+
+client_secret*.json
+credentials*.json
+token.json
+.env
