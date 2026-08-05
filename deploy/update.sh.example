@@ -24,8 +24,16 @@ exit 1
 PROJECT_PATH="<PROJECT_PATH>"          # e.g. /home/lifeassistant/lifeos
 VENV_PATH="<VENV_PATH>"                # e.g. /home/lifeassistant/lifeos/.venv
 GIT_BRANCH="main"                      # branch to deploy
-HEALTH_URL="http://127.0.0.1/health/"  # adjust if Nginx/DNS differ locally
 WEB_SERVICE="lifeassistant-web"
+
+# Use the real public URL, not a bare IP/port. Django's ALLOWED_HOSTS
+# rejects requests whose Host header doesn't match — curling an IP
+# directly (e.g. http://127.0.0.1/ or http://127.0.0.1:8001/) sends that
+# IP:port as the Host header and gets a 400, even though the app is
+# perfectly healthy; the real domain sends the right Host header
+# naturally. This also verifies the whole chain end to end (Gunicorn ->
+# reverse proxy -> TLS -> DNS), not just the raw app process.
+HEALTH_URL="https://<YOUR_DOMAIN>/health/"
 
 # -----------------------------------------------------------------------------
 
