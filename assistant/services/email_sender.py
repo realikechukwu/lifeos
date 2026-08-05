@@ -5,6 +5,7 @@ found inside the (untrusted) email body or extracted data."""
 from core.models import IncomingEmail, ParsedAction
 
 from .gmail import GmailService
+from .google_calendar import DEFAULTED_END_TIME_NOTE, DEFAULTED_START_TIME_NOTE
 
 
 def _format_time_human(t) -> str:
@@ -26,33 +27,60 @@ def _format_date_short(d) -> str:
 ASSIGNEE_LABELS = {"ike": "Ike", "wife": "wife", "both": "both of you", "unassigned": ""}
 RECIPIENT_LABELS = {"ike": "Ike", "wife": "wife", "both": "both of you"}
 
-# Maps ParsedAction.missing_fields entries to a plain-English noun phrase.
-# start_time/end_time collapse to the same word so "the time" isn't repeated.
-_MISSING_FIELD_WORDS = {
-    "title": "title",
-    "appointment_date": "date",
-    "start_time": "time",
-    "end_time": "time",
-    "due_date": "due date",
-    "reminder_date": "reminder date",
-    "reminder_time": "reminder time",
+# Maps ParsedAction.missing_fields entries to a full plain-English phrase
+# (each already includes its own article/wording, since not every field
+# reads naturally as "the X" — e.g. "who the reminder should go to").
+# start_time and end_time are kept distinct so a missing end time is never
+# described as simply "the time", which reads as if the stated start time
+# was the problem.
+_MISSING_FIELD_PHRASES = {
+    "title": "the title",
+    "appointment_date": "the date",
+    "start_time": "the start time",
+    "end_time": "the end time",
+    "due_date": "the due date",
+    "reminder_date": "the reminder date",
+    "reminder_time": "the reminder time",
+    "reminder_recipient": "who the reminder should go to",
 }
 
 
 def _describe_missing_details(parsed_action: ParsedAction) -> str:
     """Best-effort plain-English description of what was unclear, e.g. 'the
-    time' or 'the date and location'. Falls back to a generic phrase when
-    the specifics aren't in a field we recognise."""
-    words = []
+    end time' or 'the end time and who the reminder should go to'. Falls
+    back to a generic phrase when the specifics aren't in a field we
+    recognise."""
+    phrases = []
     for field in parsed_action.missing_fields or []:
-        word = _MISSING_FIELD_WORDS.get(field)
-        if word and word not in words:
-            words.append(word)
-    if not words:
+        phrase = _MISSING_FIELD_PHRASES.get(field)
+        if phrase and phrase not in phrases:
+            phrases.append(phrase)
+    if not phrases:
         return "all the details"
-    if len(words) == 1:
-        return f"the {words[0]}"
-    return "the " + " and ".join(words)
+    if len(phrases) == 1:
+        return phrases[0]
+    return " and ".join(phrases)
+
+
+def _describe_other_gaps(parsed_action: ParsedAction, exclude: set[str]) -> str:
+    """For calendar events that were still created despite a self-reported
+    gap (per the 'a title + date is enough, never block, say what's left'
+    policy — assistant/services/google_calendar.py), mentions anything not
+    already covered by a more specific sentence above it (defaulted start/
+    end time, or the reminder-unclear sentence). Empty string if nothing
+    is left to mention."""
+    phrases = []
+    for field in parsed_action.missing_fields or []:
+        if field in exclude:
+            continue
+        phrase = _MISSING_FIELD_PHRASES.get(field)
+        if phrase and phrase not in phrases:
+            phrases.append(phrase)
+    if not phrases:
+        return ""
+    if len(phrases) == 1:
+        return f"I also wasn't sure about {phrases[0]}."
+    return "I also wasn't sure about " + " and ".join(phrases) + "."
 
 
 def _event_when_phrase(parsed_action: ParsedAction) -> str:
@@ -73,6 +101,14 @@ def build_confirmation_body(outcome: str, parsed_action: ParsedAction | None = N
         title = parsed_action.title or "the appointment"
         when = _event_when_phrase(parsed_action)
         body = f'I added "{title}" to the shared calendar{when}.'
+
+        notes = parsed_action.ambiguity_notes or []
+        if DEFAULTED_START_TIME_NOTE in notes:
+            body += " I wasn't given a start time, so I used 9:00am — please adjust if that's wrong."
+        if DEFAULTED_END_TIME_NOTE in notes:
+            body += " No end time was given, so I scheduled it for 1 hour."
+
+        exclude_from_gaps = {"title", "appointment_date", "start_time", "end_time"}
         if outcome == "created_with_reminder" and context.get("reminder") is not None:
             reminder = context["reminder"]
             recipient_label = RECIPIENT_LABELS.get(reminder.recipient, reminder.recipient)
@@ -80,8 +116,14 @@ def build_confirmation_body(outcome: str, parsed_action: ParsedAction | None = N
                 f" I'll also email {recipient_label} on {_format_date_human(reminder.reminder_date)} "
                 f"at {_format_time_human(reminder.reminder_time)} as a reminder."
             )
+            exclude_from_gaps.add("reminder_recipient")
         elif outcome == "created_reminder_unclear":
             body += " I could not confirm the reminder details, so I did not schedule a reminder for it."
+            exclude_from_gaps.add("reminder_recipient")
+
+        gap_note = _describe_other_gaps(parsed_action, exclude_from_gaps)
+        if gap_note:
+            body += " " + gap_note
         return body
 
     if outcome == "task_created" and context.get("task") is not None:

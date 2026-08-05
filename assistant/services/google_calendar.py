@@ -5,7 +5,7 @@ automatic processing and the Django admin 'approve and create event' action.
 
 import base64
 import hashlib
-from datetime import timedelta
+from datetime import time, timedelta
 
 from django.conf import settings
 from django.utils import timezone
@@ -15,6 +15,15 @@ from core.models import CalendarEventRecord, ParsedAction
 
 from .extractor import combine_date_and_time, times_are_valid
 from .gmail import get_google_credentials, is_authorised_sender
+
+# For calendar events specifically, a title + date is enough to post — a
+# missing start time defaults to this rather than blocking (see
+# passes_auto_create_gate / create_event_for_parsed_action below), and the
+# confirmation reply says so explicitly (assistant/services/email_sender.py)
+# so it is never a silent guess. Tasks/notes/reminders are unaffected.
+DEFAULT_START_TIME = time(9, 0)
+DEFAULTED_START_TIME_NOTE = f"No usable start time was extracted; defaulted to {DEFAULT_START_TIME.strftime('%H:%M')}."
+DEFAULTED_END_TIME_NOTE = "No end time was given; the event was scheduled for 1 hour."
 
 
 def _start_time_or_all_day_str(parsed_action: ParsedAction) -> str:
@@ -86,7 +95,16 @@ def build_google_calendar_event_url(google_event_id: str, calendar_id: str) -> s
 
 def passes_auto_create_gate(parsed_action: ParsedAction) -> tuple[bool, list[str]]:
     """Re-validate every condition required before an event may be created
-    automatically. Confidence alone never authorises creation."""
+    automatically. Confidence alone never authorises creation, and sender/
+    type/title/date/duplicate checks below are still hard blocks.
+
+    Everything else is deliberately permissive: a title + date is enough to
+    post. A missing start time defaults to DEFAULT_START_TIME rather than
+    blocking; other self-reported missing/ambiguous fields (no end time, no
+    reminder recipient, etc.) no longer block automatic posting either — the
+    confirmation reply reports them instead (assistant/services/
+    email_sender.py), and a human can still fix them afterwards via the
+    calendar or Review."""
     reasons = []
     email = parsed_action.incoming_email
 
@@ -107,8 +125,15 @@ def passes_auto_create_gate(parsed_action: ParsedAction) -> tuple[bool, list[str
         if not (today <= appt_date <= today + timedelta(days=365)):
             reasons.append("Appointment date is not today or within the next 365 days.")
 
+    # Persisted here (not just in create_event_for_parsed_action) so the
+    # duplicate check just below and the eventual creation both see the
+    # same resolved time, and so it's recorded even if this turns out to
+    # be a duplicate/reschedule that isn't actually (re-)created.
     if not parsed_action.all_day and parsed_action.start_time is None:
-        reasons.append("Start time is missing and the event is not all-day.")
+        parsed_action.start_time = DEFAULT_START_TIME
+        if DEFAULTED_START_TIME_NOTE not in (parsed_action.ambiguity_notes or []):
+            parsed_action.ambiguity_notes = list(parsed_action.ambiguity_notes or []) + [DEFAULTED_START_TIME_NOTE]
+        parsed_action.save(update_fields=["start_time", "ambiguity_notes"])
 
     if appt_date and parsed_action.start_time and parsed_action.end_time:
         if not times_are_valid(appt_date, parsed_action.start_time, parsed_action.end_time):
@@ -116,12 +141,6 @@ def passes_auto_create_gate(parsed_action: ParsedAction) -> tuple[bool, list[str
 
     if parsed_action.confidence < settings.AUTOMATIC_ACTION_CONFIDENCE_THRESHOLD:
         reasons.append("Confidence is below the automatic action threshold.")
-
-    if parsed_action.missing_fields:
-        reasons.append("There are material missing fields.")
-
-    if parsed_action.ambiguity_notes:
-        reasons.append("There are ambiguity notes.")
 
     calendar_id = settings.GOOGLE_CALENDAR_ID
     if not reasons and appt_date is not None:
@@ -156,8 +175,15 @@ def create_event_for_parsed_action(parsed_action: ParsedAction) -> CalendarEvent
     if appt_date is None:
         raise ValueError("Cannot create an event without a valid appointment date.")
 
+    # Same default as passes_auto_create_gate, repeated here (idempotent —
+    # a no-op if the gate already set it) so admin/Review approval, which
+    # calls this function directly without going through the gate, gets
+    # the same "title + date is enough" behaviour.
     if not parsed_action.all_day and parsed_action.start_time is None:
-        raise ValueError("Cannot create a timed event without a start time.")
+        parsed_action.start_time = DEFAULT_START_TIME
+        if DEFAULTED_START_TIME_NOTE not in (parsed_action.ambiguity_notes or []):
+            parsed_action.ambiguity_notes = list(parsed_action.ambiguity_notes or []) + [DEFAULTED_START_TIME_NOTE]
+        parsed_action.save(update_fields=["start_time", "ambiguity_notes"])
 
     if parsed_action.start_time and parsed_action.end_time:
         if not times_are_valid(appt_date, parsed_action.start_time, parsed_action.end_time):
@@ -183,11 +209,18 @@ def create_event_for_parsed_action(parsed_action: ParsedAction) -> CalendarEvent
     start_dt = end_dt = None
     if not parsed_action.all_day:
         start_dt = combine_date_and_time(appt_date, parsed_action.start_time)
-        end_dt = (
-            combine_date_and_time(appt_date, parsed_action.end_time)
-            if parsed_action.end_time
-            else start_dt + timedelta(hours=1)
-        )
+        if parsed_action.end_time:
+            end_dt = combine_date_and_time(appt_date, parsed_action.end_time)
+        else:
+            end_dt = start_dt + timedelta(hours=1)
+            # Persist the resolved end time (not just used for the Google
+            # event body) so CalendarEventRecord.end_time, the web app's
+            # calendar/upcoming views, and the confirmation reply all agree
+            # on what was actually scheduled.
+            parsed_action.end_time = end_dt.time()
+            if DEFAULTED_END_TIME_NOTE not in (parsed_action.ambiguity_notes or []):
+                parsed_action.ambiguity_notes = list(parsed_action.ambiguity_notes or []) + [DEFAULTED_END_TIME_NOTE]
+            parsed_action.save(update_fields=["end_time", "ambiguity_notes"])
 
     description_lines = []
     if parsed_action.meeting_url:
