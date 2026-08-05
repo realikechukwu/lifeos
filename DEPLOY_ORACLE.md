@@ -424,6 +424,87 @@ nano update.sh   # fill in the placeholders
 ./update.sh
 ```
 
+### Continuous deployment (optional): auto-deploy on push via GitHub Actions
+
+By default, nothing about this deployment is automatic — a `git push` does
+nothing to the running server until you SSH in and run `./update.sh`
+yourself. `.github/workflows/deploy.yml` adds a GitHub Actions workflow
+that runs `./update.sh` over SSH automatically on every push to `main`
+(and on demand from the Actions tab). It is **not** active until you add
+the secrets below — an empty/missing secret just makes the workflow fail
+loudly, it never silently does nothing.
+
+This needs a **new, separate SSH keypair** — not the deploy key you may
+have already added to GitHub so the server could clone the repo. That one
+lets the *server* pull *from* GitHub; this one lets *GitHub Actions* push
+commands *into* the server, the opposite direction, and should not be reused.
+
+1. **Generate the keypair** on the server, as the app user (`<LINUX_USERNAME>`):
+   ```bash
+   ssh-keygen -t ed25519 -C "github-actions-deploy" -f ~/.ssh/github_actions_deploy -N ""
+   ```
+
+2. **Authorise its public half** to log in as that user:
+   ```bash
+   cat ~/.ssh/github_actions_deploy.pub >> ~/.ssh/authorized_keys
+   chmod 600 ~/.ssh/authorized_keys
+   ```
+
+3. **Copy the private key** so you can paste it into GitHub:
+   ```bash
+   cat ~/.ssh/github_actions_deploy
+   ```
+   Copy the *entire* output, including the `-----BEGIN OPENSSH PRIVATE
+   KEY-----` / `-----END...-----` lines.
+
+4. **Add repository secrets** on GitHub: repo → **Settings → Secrets and
+   variables → Actions → New repository secret**. Create all four:
+   - `ORACLE_SSH_DEPLOY_KEY` — the private key text you just copied
+   - `ORACLE_HOST` — this server's public IP or hostname
+   - `ORACLE_SSH_USER` — `<LINUX_USERNAME>`
+   - `ORACLE_PROJECT_PATH` — `<PROJECT_PATH>`
+
+   Secrets are encrypted at rest and masked in logs — this is safe even on
+   a public repository. Never put any of these values directly in the
+   workflow file itself.
+
+5. **Delete the private key from the server** — only the GitHub secret
+   needs to keep it now:
+   ```bash
+   shred -u ~/.ssh/github_actions_deploy   # or: rm ~/.ssh/github_actions_deploy
+   ```
+   (Keep `~/.ssh/github_actions_deploy.pub` and the line it added to
+   `authorized_keys` — that's what's actually needed going forward.)
+
+6. **Allow the restart step to run unattended.** `update.sh` calls `sudo
+   systemctl restart lifeassistant-web`, and a GitHub Actions session has
+   no terminal to answer a sudo password prompt — without this, that step
+   just hangs. Install the scoped, single-command sudo rule:
+   ```bash
+   which systemctl   # confirm the real path first
+   sudo visudo -f /etc/sudoers.d/lifeassistant-deploy
+   # paste (with the real username and systemctl path):
+   #   <LINUX_USERNAME> ALL=(root) NOPASSWD: /usr/bin/systemctl restart lifeassistant-web
+   sudo chmod 440 /etc/sudoers.d/lifeassistant-deploy
+   ```
+   See `deploy/sudoers/lifeassistant-deploy.example` for the same content
+   with more context. `visudo` validates syntax before saving — never edit
+   a sudoers file with a plain text editor.
+
+7. **Check SSH reachability.** GitHub's hosted Actions runners use
+   rotating IPs, not a fixed range you can allow-list — if this server's
+   firewall/Security List restricts SSH to specific IPs, this workflow
+   will fail to connect. Key-only authentication (already the case here)
+   is what keeps SSH safe with port 22 open broadly; if you'd rather not
+   widen SSH access at all, a self-hosted Actions runner installed on this
+   same server is the alternative (own separate research — not covered
+   here).
+
+8. **Test it**: push a trivial commit to `main`, or trigger it manually
+   from the repo's **Actions** tab → *Deploy to Oracle* → **Run workflow**.
+   Watch the run's logs there, and cross-check with
+   `sudo journalctl -u lifeassistant-web -n 50 --no-pager` on the server.
+
 ---
 
 ## Backups

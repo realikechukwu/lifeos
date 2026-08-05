@@ -1,0 +1,34 @@
+name: Deploy to Oracle
+
+# Runs deploy/update.sh (copied to `update.sh` on the server, per
+# DEPLOY_ORACLE.md) over SSH whenever main is pushed, or on demand via the
+# Actions tab. See DEPLOY_ORACLE.md "Continuous deployment" for full setup
+# instructions (generating the deploy key, required repo secrets, and the
+# passwordless-sudo rule this depends on).
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+# Never run two deploys at once; a second push while one is still running
+# waits for the first to finish rather than overlapping with it.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: SSH in and run update.sh
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.ORACLE_HOST }}
+          username: ${{ secrets.ORACLE_SSH_USER }}
+          key: ${{ secrets.ORACLE_SSH_DEPLOY_KEY }}
+          port: 22 # change if this server uses a non-standard SSH port
+          script: |
+            set -e
+            cd "${{ secrets.ORACLE_PROJECT_PATH }}"
+            ./update.sh

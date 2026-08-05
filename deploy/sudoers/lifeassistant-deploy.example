@@ -1,0 +1,20 @@
+# Lets the app/deploy user restart the Gunicorn service WITHOUT a password
+# prompt, scoped to exactly that one command — nothing broader. Needed
+# because deploy/update.sh.example runs `sudo systemctl restart
+# <service>`, and an unattended deploy (e.g. GitHub Actions, see
+# DEPLOY_ORACLE.md "Continuous deployment") has no terminal to type a
+# sudo password into; without this rule that step just hangs.
+#
+# Confirm the real path to systemctl first (usually /usr/bin/systemctl or
+# /bin/systemctl — varies by distro):
+#   which systemctl
+#
+# Install with visudo, which validates syntax before saving — never edit
+# a sudoers file with a plain text editor, a syntax error there can lock
+# out all sudo access on the box:
+#   sudo visudo -f /etc/sudoers.d/lifeassistant-deploy
+#   (paste the one line below, with <LINUX_USERNAME> and the systemctl
+#   path filled in, then save)
+#   sudo chmod 440 /etc/sudoers.d/lifeassistant-deploy
+
+<LINUX_USERNAME> ALL=(root) NOPASSWD: /usr/bin/systemctl restart lifeassistant-web
