@@ -1,0 +1,13 @@
+Django>=5.0,<6.0
+psycopg[binary]>=3.1
+dj-database-url>=2.1
+python-dotenv>=1.0
+google-api-python-client>=2.100
+google-auth>=2.23
+google-auth-oauthlib>=1.1
+google-auth-httplib2>=0.2
+openai>=1.40
+pydantic>=2.5
+cryptography>=42
+bleach>=6.1
+beautifulsoup4>=4.12

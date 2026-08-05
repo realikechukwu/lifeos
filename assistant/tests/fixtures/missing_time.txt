@@ -1,0 +1,13 @@
+---------- Forwarded message ---------
+From: The Sunshine Nursery <admin@sunshinenursery.example.com>
+Date: Wed, 5 Aug 2026 08:00:00 +0100
+Subject: Parents evening
+To: wife@example.com
+
+Dear parents,
+
+Parents evening will be held on Thursday 20 August 2026. Please sign up
+for a slot nearer the time; times have not yet been allocated.
+
+Thank you,
+The Sunshine Nursery

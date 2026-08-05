@@ -1,0 +1,17 @@
+Hi, please add this to the calendar.
+
+---------- Forwarded message ---------
+From: Bright Smiles Dental <bookings@brightsmiles.example.com>
+Date: Mon, 3 Aug 2026 09:15:00 +0100
+Subject: Appointment confirmation
+To: ike@example.com
+
+Dear Ike,
+
+This confirms your dental appointment on Tuesday 18 August 2026 at 10:30am
+with Dr. Patel. Please arrive 10 minutes early.
+
+Location: Bright Smiles Dental, 12 High Street, London
+Booking reference: BSD-88213
+
+See you then.

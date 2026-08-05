@@ -1,0 +1,7 @@
+---------- Forwarded message ---------
+From: Willow House Dentist <bookings@willowhouse.example.com>
+Date: Mon, 3 Aug 2026 09:00:00 +0100
+Subject: Your appointment letter
+To: ike@example.com
+
+Please see the attached letter for your appointment details.

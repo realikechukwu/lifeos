@@ -1,0 +1,10 @@
+---------- Forwarded message ---------
+From: City Medical Centre <noreply@citymedical.example.com>
+Date: Mon, 3 Aug 2026 09:00:00 +0100
+Subject: Appointment and reminders
+To: ike@example.com
+
+Your last visit was on 12 July 2026. Your prescription was reviewed on
+15 July 2026. Your next appointment is confirmed for Friday 21 August 2026
+at 14:15 with Dr. Owusu. Please note the surgery is closed on 31 August 2026
+for a bank holiday.
