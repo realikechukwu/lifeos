@@ -91,6 +91,20 @@ class TelegramInboxTests(TestCase):
         process_telegram_update(message_update(102, "/reminders"), bot=self.bot)
         self.assertIn("Pay council tax", self.bot.messages[-1][1])
 
+    def test_main_menu_clearly_separates_manage_and_create_actions(self):
+        process_telegram_update(message_update(105, "/start"), bot=self.bot)
+        buttons = [
+            button["text"]
+            for row in self.bot.messages[-1][2]["reply_markup"]["inline_keyboard"]
+            for button in row
+        ]
+        self.assertIn("📋 Tasks", buttons)
+        self.assertIn("📚 Notes", buttons)
+        self.assertIn("🔔 Reminders", buttons)
+        self.assertEqual([label for label in buttons if label in {"➕ Task", "➕ Event", "➕ Note", "➕ Reminder"}], [
+            "➕ Task", "➕ Event", "➕ Note", "➕ Reminder"
+        ])
+
     def test_note_can_be_edited_after_explicit_confirmation(self):
         note = Note.objects.create(title="Kitchen colour", body="Blue")
         process_telegram_update(message_update(110, "/start"), bot=self.bot)

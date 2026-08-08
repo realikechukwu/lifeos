@@ -61,12 +61,21 @@ def _keyboard(*rows: list[dict]) -> dict:
 
 def main_menu() -> dict:
     return _keyboard(
-        [_button("☀️ Today", "tg:today:show"), _button("✅ Tasks", "tg:inbox:tasks:0")],
-        [_button("📅 Calendar", "tg:inbox:calendar:0"), _button("📝 Notes", "tg:inbox:notes:0")],
-        [_button("⏰ Reminders", "tg:inbox:reminders:0"), _button("⚙️ Briefing", "tg:settings:show")],
-        [_button("➕ Task", "tg:new:task"), _button("📅 Event", "tg:new:event")],
-        [_button("📝 Note", "tg:new:note"), _button("⏰ Reminder", "tg:new:reminder")],
+        # First three rows are for viewing/managing existing LifeOS items.
+        [_button("☀️ Today", "tg:today:show"), _button("📋 Tasks", "tg:inbox:tasks:0")],
+        [_button("🗓 Calendar", "tg:inbox:calendar:0"), _button("📚 Notes", "tg:inbox:notes:0")],
+        [_button("🔔 Reminders", "tg:inbox:reminders:0"), _button("⚙️ Briefing", "tg:settings:show")],
+        # Every creation action starts with the same visual cue.
+        [_button("➕ Task", "tg:new:task"), _button("➕ Event", "tg:new:event")],
+        [_button("➕ Note", "tg:new:note"), _button("➕ Reminder", "tg:new:reminder")],
     )
+
+
+MAIN_MENU_PROMPT = (
+    "What would you like to do?\n\n"
+    "<b>View & manage</b> uses the top three rows.\n"
+    "<b>➕ Add something new</b> uses the bottom two rows."
+)
 
 
 def _configured_role(user_id: int) -> str | None:
@@ -829,7 +838,9 @@ def _handle_command(
     if command in ("/start", "/help"):
         bot.send_message(
             chat.chat_id,
-            "Hello — I’m LifeOS. Tell me naturally what you want to remember, schedule, or get done. I’ll ask if anything is unclear and show you a confirmation before acting.",
+            "Hello — I’m LifeOS. Tell me naturally what you want to remember, schedule, or get done. "
+            "I’ll ask if anything is unclear and show you a confirmation before acting.\n\n"
+            "<b>View & manage</b> is at the top of the menu; <b>➕ Add something new</b> is at the bottom.",
             reply_markup=main_menu(),
         )
         return True
@@ -895,7 +906,7 @@ def _handle_callback(data: str, chat: TelegramChat, user: TelegramUser, bot: Tel
     action = parts[1]
     target = parts[2]
     if action == "menu":
-        bot.send_message(chat.chat_id, "What would you like to do?", reply_markup=main_menu())
+        bot.send_message(chat.chat_id, MAIN_MENU_PROMPT, reply_markup=main_menu())
         return
     if action == "today":
         _show_today(chat.chat_id, bot)
