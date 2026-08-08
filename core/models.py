@@ -62,6 +62,10 @@ class HouseholdMember(models.Model):
 
 
 class IncomingEmail(models.Model):
+    class Source(models.TextChoices):
+        EMAIL = "email", "Email"
+        TELEGRAM = "telegram", "Telegram"
+
     class Status(models.TextChoices):
         RECEIVED = "received", "Received"
         PROCESSING = "processing", "Processing"
@@ -72,6 +76,7 @@ class IncomingEmail(models.Model):
 
     gmail_message_id = models.CharField(max_length=64, unique=True)
     gmail_thread_id = models.CharField(max_length=64, blank=True, default="")
+    source = models.CharField(max_length=20, choices=Source.choices, default=Source.EMAIL)
 
     outer_sender = models.EmailField(help_text="Address that actually sent/forwarded the email to us.")
     recipients = models.TextField(blank=True, default="")
@@ -384,6 +389,120 @@ class AuditLog(models.Model):
 
     def __str__(self):
         return f"{self.action} ({'ok' if self.success else 'failed'})"
+
+
+class TelegramUser(models.Model):
+    """An allow-listed household member as Telegram identifies them.
+
+    Telegram usernames and display names are descriptive only. Authorisation
+    always comes from the immutable numeric user id configured by the owner.
+    """
+
+    user_id = models.BigIntegerField(unique=True)
+    role = models.CharField(max_length=20, choices=HouseholdMember.Role.choices)
+    username = models.CharField(max_length=64, blank=True, default="")
+    display_name = models.CharField(max_length=255, blank=True, default="")
+    authorised = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["role", "user_id"]
+
+    def __str__(self):
+        return self.display_name or f"Telegram user {self.user_id}"
+
+
+class TelegramChat(models.Model):
+    class ChatType(models.TextChoices):
+        PRIVATE = "private", "Private"
+        GROUP = "group", "Group"
+        SUPERGROUP = "supergroup", "Supergroup"
+
+    chat_id = models.BigIntegerField(unique=True)
+    chat_type = models.CharField(max_length=20, choices=ChatType.choices)
+    title = models.CharField(max_length=255, blank=True, default="")
+    authorised = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["chat_type", "chat_id"]
+
+    def __str__(self):
+        return self.title or f"Telegram chat {self.chat_id}"
+
+
+class TelegramUpdate(models.Model):
+    """Idempotency record for a Telegram webhook delivery.
+
+    We deliberately do not persist Telegram's full raw JSON payload here.
+    Conversation text is retained in the source record for the same audit and
+    review needs as email, while the temporary model transcript is cleared
+    after a successfully executed request.
+    """
+
+    update_id = models.BigIntegerField(unique=True)
+    update_type = models.CharField(max_length=30, blank=True, default="")
+    chat = models.ForeignKey(
+        TelegramChat, on_delete=models.SET_NULL, null=True, blank=True, related_name="updates"
+    )
+    user = models.ForeignKey(
+        TelegramUser, on_delete=models.SET_NULL, null=True, blank=True, related_name="updates"
+    )
+    processed = models.BooleanField(default=False)
+    error = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    processed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-update_id"]
+
+    def __str__(self):
+        return f"Telegram update {self.update_id}"
+
+
+class TelegramConversation(models.Model):
+    class Status(models.TextChoices):
+        AWAITING_CLARIFICATION = "awaiting_clarification", "Awaiting clarification"
+        AWAITING_CONFIRMATION = "awaiting_confirmation", "Awaiting confirmation"
+        EXECUTING = "executing", "Executing"
+        COMPLETED = "completed", "Completed"
+        CANCELLED = "cancelled", "Cancelled"
+        FAILED = "failed", "Failed"
+
+    chat = models.ForeignKey(TelegramChat, on_delete=models.CASCADE, related_name="conversations")
+    requested_by = models.ForeignKey(
+        TelegramUser, on_delete=models.PROTECT, related_name="conversations"
+    )
+    incoming_email = models.OneToOneField(
+        IncomingEmail, on_delete=models.CASCADE, related_name="telegram_conversation"
+    )
+    parsed_action = models.OneToOneField(
+        ParsedAction,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="telegram_conversation",
+    )
+    status = models.CharField(
+        max_length=30, choices=Status.choices, default=Status.AWAITING_CLARIFICATION
+    )
+    transcript = models.JSONField(default=list, blank=True)
+    draft_extraction = models.JSONField(default=dict, blank=True)
+    clarification_count = models.PositiveSmallIntegerField(default=0)
+    last_bot_message_id = models.BigIntegerField(null=True, blank=True)
+    last_error = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=["chat", "status"])]
+
+    def __str__(self):
+        return f"Telegram conversation {self.id} ({self.get_status_display()})"
 
 
 class GoogleCredential(models.Model):

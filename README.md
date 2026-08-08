@@ -1,4 +1,4 @@
-# Family Email Assistant — Phase 1 + 2 + 3
+# Family LifeOS Assistant — Email, Web, and Telegram
 
 A deliberately scoped Django app. Phase 1: forward an appointment email to
 `lifeofchukwudi@gmail.com`, it gets extracted, validated, and either added to
@@ -11,6 +11,12 @@ Phase 3 adds a small authenticated **family web interface** (Upcoming,
 Calendar, Tasks, Notes, Review) on top of the same data, plus a production
 settings structure and Oracle deployment files — see
 [`PHASE_3_COMPLETE.md`](PHASE_3_COMPLETE.md).
+
+Telegram is an optional two-way channel over the same action services. The
+two configured household users can talk to LifeOS privately or in one linked
+family group. The bot asks follow-up questions, shows a structured summary,
+and requires a button confirmation before executing an action. Leaving its
+settings empty preserves the original email-only behaviour.
 
 ## Project structure
 
@@ -89,6 +95,34 @@ email is routed to exactly one action type — calendar event, task, note,
 email reminder, or mark-task-complete — plus, only for a calendar event, one
 linked reminder if explicitly requested ("...and remind both of us the day
 before").
+
+## Telegram conversations
+
+Set the Telegram values described in `.env.example`, deploy/migrate, then run:
+
+```bash
+DJANGO_SETTINGS_MODULE=config.settings.production python manage.py configure_telegram
+```
+
+This installs the HTTPS webhook at `<APP_BASE_URL>/telegram/webhook/` and the
+bot command menu. Requests are accepted only when Telegram supplies the
+configured webhook-secret header and the immutable sender id matches
+`TELEGRAM_IKE_USER_ID` or `TELEGRAM_WIFE_USER_ID`.
+
+Each authorised user can `/start` the bot privately. For the shared group,
+Ike sends `/linkgroup` once inside it; only the configured owner id can enrol a
+group. Alternatively, put the group's negative numeric id in
+`TELEGRAM_ALLOWED_GROUP_CHAT_IDS`. BotFather's Group Privacy must be off for
+ordinary group messages rather than commands only.
+
+Useful commands are `/tasks`, `/upcoming`, `/cancel`, `/help`, and
+`/linkgroup`. The inline menu also provides buttons for new tasks, events,
+notes, reminders, and one-tap task completion. Scheduled reminders created
+through Telegram continue to use the established Gmail reminder delivery.
+
+Keep the Bot API token and webhook secret only in the server environment. If
+a token is ever pasted into chat, logs, or source control, regenerate it in
+BotFather after testing.
 
 ## Send due reminders
 

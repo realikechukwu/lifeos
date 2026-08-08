@@ -13,6 +13,10 @@ from .models import (
     ParsedAction,
     Reminder,
     Task,
+    TelegramChat,
+    TelegramConversation,
+    TelegramUpdate,
+    TelegramUser,
 )
 
 STALE_PROCESSING_MINUTES = 15
@@ -26,10 +30,43 @@ class HouseholdMemberAdmin(admin.ModelAdmin):
     readonly_fields = ("created_at", "updated_at")
 
 
+@admin.register(TelegramUser)
+class TelegramUserAdmin(admin.ModelAdmin):
+    list_display = ("display_name", "user_id", "role", "authorised", "updated_at")
+    list_filter = ("role", "authorised")
+    search_fields = ("display_name", "username", "user_id")
+    readonly_fields = ("user_id", "role", "username", "display_name", "created_at", "updated_at")
+
+
+@admin.register(TelegramChat)
+class TelegramChatAdmin(admin.ModelAdmin):
+    list_display = ("title", "chat_id", "chat_type", "authorised", "updated_at")
+    list_filter = ("chat_type", "authorised")
+    search_fields = ("title", "chat_id")
+    readonly_fields = ("chat_id", "chat_type", "title", "created_at", "updated_at")
+
+
+@admin.register(TelegramUpdate)
+class TelegramUpdateAdmin(admin.ModelAdmin):
+    list_display = ("update_id", "update_type", "chat", "user", "processed", "created_at")
+    list_filter = ("update_type", "processed")
+    search_fields = ("update_id", "error")
+    readonly_fields = [field.name for field in TelegramUpdate._meta.fields]
+
+
+@admin.register(TelegramConversation)
+class TelegramConversationAdmin(admin.ModelAdmin):
+    list_display = ("id", "chat", "requested_by", "status", "parsed_action", "updated_at")
+    list_filter = ("status",)
+    search_fields = ("chat__title", "requested_by__display_name", "incoming_email__body_text")
+    readonly_fields = [field.name for field in TelegramConversation._meta.fields]
+
+
 @admin.register(IncomingEmail)
 class IncomingEmailAdmin(admin.ModelAdmin):
     list_display = (
         "subject",
+        "source",
         "outer_sender",
         "status",
         "is_forwarded",
@@ -37,7 +74,7 @@ class IncomingEmailAdmin(admin.ModelAdmin):
         "processing_attempts",
         "received_at",
     )
-    list_filter = ("status", "is_forwarded", "has_attachments")
+    list_filter = ("source", "status", "is_forwarded", "has_attachments")
     search_fields = ("subject", "outer_sender", "gmail_message_id", "gmail_thread_id", "body_text")
     readonly_fields = (
         "gmail_message_id",
@@ -230,6 +267,11 @@ class ParsedActionAdmin(admin.ModelAdmin):
                 skipped += 1
                 continue
             email = action.incoming_email
+            # Telegram conversations are retried from their own conversation
+            # flow; never hand a Telegram source to the Gmail poller.
+            if email.source != IncomingEmail.Source.EMAIL:
+                skipped += 1
+                continue
             email.processing_attempts += 1
             email.status = IncomingEmail.Status.PROCESSING
             email.save(update_fields=["processing_attempts", "status"])

@@ -28,6 +28,15 @@ def _list_env(name, default=""):
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 
+def _int_env(name, default=0):
+    raw = os.environ.get(name, "").strip()
+    return int(raw) if raw else default
+
+
+def _int_list_env(name, default=""):
+    return [int(item) for item in _list_env(name, default)]
+
+
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "django-insecure-dev-only-change-me")
 
 
@@ -191,6 +200,15 @@ GMAIL_POLL_QUERY_NEWER_THAN = "7d"
 # (e.g. in emails generated from the web app in a future phase). Never
 # required for the app to function locally.
 APP_BASE_URL = os.environ.get("APP_BASE_URL", "")
+
+# Telegram is an optional, isolated two-way input channel. Leaving these
+# unset keeps the existing email-only application behaviour unchanged.
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_WEBHOOK_SECRET = os.environ.get("TELEGRAM_WEBHOOK_SECRET", "")
+TELEGRAM_IKE_USER_ID = _int_env("TELEGRAM_IKE_USER_ID")
+TELEGRAM_WIFE_USER_ID = _int_env("TELEGRAM_WIFE_USER_ID")
+TELEGRAM_ALLOWED_GROUP_CHAT_IDS = _int_list_env("TELEGRAM_ALLOWED_GROUP_CHAT_IDS")
+TELEGRAM_MAX_CLARIFICATIONS = _int_env("TELEGRAM_MAX_CLARIFICATIONS", 4)
 
 
 # ---------------------------------------------------------------------------

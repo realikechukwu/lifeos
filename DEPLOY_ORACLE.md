@@ -115,6 +115,9 @@ for the full list. At minimum for production you need:
 - `OPENAI_API_KEY`, `OPENAI_MODEL`
 - `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` (or `GOOGLE_CLIENT_SECRETS_FILE`), `GOOGLE_CALENDAR_ID`
 - `AUTHORISED_EMAIL_IKE`, `AUTHORISED_EMAIL_WIFE`
+- Optional Telegram channel: `TELEGRAM_BOT_TOKEN`, a freshly generated
+  `TELEGRAM_WEBHOOK_SECRET`, `TELEGRAM_IKE_USER_ID`, and
+  `TELEGRAM_WIFE_USER_ID`. Keep the real bot token only in the server `.env`.
 - **Path B only**: `GUNICORN_BIND=127.0.0.1:<LOCAL_APP_PORT>` — makes
   Gunicorn bind a host-only TCP port instead of the default Unix socket, so
   the existing shared reverse proxy can reach it (see step 13, Path B).
@@ -377,7 +380,25 @@ curl -s https://<YOUR_DOMAIN>/health/
 If it returns `"database": "unreachable"` (HTTP 503), check `DATABASE_URL`
 and Supabase network/allow-list settings before anything else.
 
-## 19. Running the first live email test
+## 19. Configuring Telegram (optional)
+
+After the migration and web restart have succeeded, install the bot command
+menu and HTTPS webhook:
+
+```bash
+cd <PROJECT_PATH>
+source <VENV_PATH>/bin/activate
+export DJANGO_SETTINGS_MODULE=config.settings.production
+python manage.py configure_telegram
+```
+
+The command does not print the token or webhook secret. In Telegram, send
+`/start` privately. In the family group, the configured Ike account sends
+`/linkgroup` once. If normal group messages are not arriving, use BotFather →
+Bot Settings → Group Privacy → Turn off, then remove and re-add the bot if
+Telegram asks you to do so.
+
+## 20. Running the first live email test
 
 1. Authenticate the assistant Google account **against production data**:
    run this locally (a browser is required for the OAuth consent screen),
@@ -408,7 +429,7 @@ and Supabase network/allow-list settings before anything else.
 
 See `MANUAL_TEST_PHASE_3.md` for the full manual test checklist.
 
-## 20. Updating the application safely later
+## 21. Updating the application safely later
 
 Use `deploy/update.sh.example` as a starting point (copy it, fill in the
 placeholders, keep it out of version control if it ends up containing
