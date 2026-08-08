@@ -1,11 +1,15 @@
 """Builds and sends the plain-language confirmation reply. Always replies to
 the authorised outer sender of the incoming email — never to an address
-found inside the (untrusted) email body or extracted data."""
+found inside the (untrusted) email body or extracted data. May additionally
+CC the other household member, but only when explicitly requested
+(ParsedAction.notify_both) and only with one of the two closed, configured
+addresses — same trust boundary as resolve_recipient_emails()."""
 
-from core.models import IncomingEmail, ParsedAction
+from core.models import IncomingEmail, ParsedAction, RecipientTarget, normalise_email
 
 from .gmail import GmailService
 from .google_calendar import DEFAULTED_END_TIME_NOTE, DEFAULTED_START_TIME_NOTE
+from .reminders import resolve_recipient_emails
 
 
 def _format_time_human(t) -> str:
@@ -192,6 +196,17 @@ def build_confirmation_body(outcome: str, parsed_action: ParsedAction | None = N
     )
 
 
+def _resolve_confirmation_cc(incoming_email: IncomingEmail, parsed_action: ParsedAction | None) -> str | None:
+    """Only ever the *other* configured household address, and only when
+    explicitly requested. `to_addr` (the outer sender) is never duplicated
+    into the CC line."""
+    if parsed_action is None or not parsed_action.notify_both:
+        return None
+    outer = normalise_email(incoming_email.outer_sender)
+    others = [a for a in resolve_recipient_emails(RecipientTarget.BOTH) if normalise_email(a) != outer]
+    return ", ".join(others) if others else None
+
+
 def send_confirmation(
     incoming_email: IncomingEmail,
     outcome: str,
@@ -204,6 +219,7 @@ def send_confirmation(
     return service.send_reply(
         thread_id=incoming_email.gmail_thread_id,
         to_addr=incoming_email.outer_sender,
+        cc_addr=_resolve_confirmation_cc(incoming_email, parsed_action),
         subject=incoming_email.subject or "Your email",
         body_text=body,
     )

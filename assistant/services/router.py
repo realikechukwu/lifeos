@@ -92,6 +92,7 @@ def build_parsed_action_from_extraction(incoming_email, extraction) -> ParsedAct
         reminder_recipient=extraction.reminder_recipient or "",
         reminder_lead_days=extraction.reminder_lead_days,
         related_household_member=related_member,
+        notify_both=extraction.notify_both,
         confidence=extraction.confidence,
         missing_fields=missing_fields,
         ambiguity_notes=ambiguity_notes,

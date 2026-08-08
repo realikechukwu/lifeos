@@ -176,6 +176,14 @@ class ParsedAction(models.Model):
         HouseholdMember, on_delete=models.SET_NULL, null=True, blank=True, related_name="parsed_actions"
     )
 
+    # Set only when the email explicitly asked to notify/email/cc both
+    # household members about the confirmation reply. Resolved to real
+    # addresses solely via AUTHORISED_EMAIL_IKE / AUTHORISED_EMAIL_WIFE in
+    # assistant/services/email_sender.py — never from anything else in the
+    # email. The reply's `to_addr` is always the authorised outer sender
+    # regardless of this flag; this only ever adds a CC.
+    notify_both = models.BooleanField(default=False)
+
     confidence = models.FloatField(default=0.0)
     missing_fields = models.JSONField(default=list, blank=True)
     ambiguity_notes = models.JSONField(default=list, blank=True)

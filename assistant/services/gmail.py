@@ -116,11 +116,16 @@ class GmailService:
         subject: str,
         body_text: str,
         in_reply_to_message_id_header: str | None = None,
+        cc_addr: str | None = None,
     ) -> str:
         """Send a plain-text reply, threaded where a thread id / Message-ID header
-        is available. Returns the sent message's Gmail id."""
+        is available. Returns the sent message's Gmail id. `to_addr` is always
+        the authorised recipient; `cc_addr` (comma-separated for more than
+        one) is optional and additive only."""
         message = MIMEText(body_text)
         message["To"] = to_addr
+        if cc_addr:
+            message["Cc"] = cc_addr
         message["Subject"] = subject if subject.lower().startswith("re:") else f"Re: {subject}"
         if in_reply_to_message_id_header:
             message["In-Reply-To"] = in_reply_to_message_id_header

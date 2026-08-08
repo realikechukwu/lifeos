@@ -24,6 +24,7 @@ class AssistantActionSchemaTests(SimpleTestCase):
         )
         self.assertEqual(extraction.action_type, "create_calendar_event")
         self.assertEqual(extraction.related_person, "unknown")  # default
+        self.assertFalse(extraction.notify_both)  # default: never guess a CC
 
     def test_invalid_action_type_is_rejected(self):
         with self.assertRaises(ValidationError):
