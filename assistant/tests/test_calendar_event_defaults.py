@@ -105,6 +105,119 @@ class CalendarEventDefaultingTests(TestCase):
         self.assertNotIn("I used 9:00am", body)
 
 
+@override_settings(
+    AUTHORISED_EMAIL_IKE="ike@example.com",
+    AUTHORISED_EMAIL_WIFE="wife@example.com",
+    GOOGLE_CALENDAR_ID="primary",
+)
+class RecurringCalendarEventTests(TestCase):
+    """Recurring events are created the same way as one-off events — the
+    only difference is an extra `recurrence` list on the Google event body.
+    Ambiguous/inconsistent recurrence phrasing must never block the post
+    (same precedent as the missing start/end time tests above); worst case
+    it's created as a one-off with an ambiguity note."""
+
+    def _make_email(self, message_id):
+        return IncomingEmail.objects.create(
+            gmail_message_id=message_id,
+            outer_sender="ike@example.com",
+            subject="Recurring event",
+            status=IncomingEmail.Status.RECEIVED,
+        )
+
+    @patch("assistant.services.google_calendar.get_google_credentials")
+    @patch("assistant.services.google_calendar.build")
+    def test_weekly_recurrence_is_sent_to_google_and_confirmed(self, mock_build, mock_creds):
+        mock_service = MagicMock()
+        mock_service.events.return_value.insert.return_value.execute.return_value = {"id": "evt-recur-1"}
+        mock_build.return_value = mock_service
+
+        event_date = timezone.localdate() + timedelta(days=7)
+        email = self._make_email("msg-recur-1")
+        parsed_action = ParsedAction.objects.create(
+            incoming_email=email,
+            action_type=ParsedAction.ActionType.CREATE_CALENDAR_EVENT,
+            title="Swimming lessons",
+            appointment_date=event_date,
+            start_time=time(17, 0),
+            recurrence_frequency="weekly",
+            recurrence_count=8,
+            confidence=0.95,
+        )
+
+        outcome, extra = route_and_execute(parsed_action)
+
+        self.assertEqual(outcome, "created")
+        insert_kwargs = mock_service.events.return_value.insert.call_args.kwargs
+        self.assertEqual(insert_kwargs["body"]["recurrence"], ["RRULE:FREQ=WEEKLY;COUNT=8"])
+
+        record = extra["calendar_event"]
+        self.assertEqual(record.recurrence_rule, "RRULE:FREQ=WEEKLY;COUNT=8")
+        self.assertIn("8 times", record.recurrence_description)
+
+        body = build_confirmation_body(outcome, parsed_action, extra)
+        self.assertIn(record.recurrence_description, body)
+
+    @patch("assistant.services.google_calendar.get_google_credentials")
+    @patch("assistant.services.google_calendar.build")
+    def test_ambiguous_recurrence_end_date_does_not_block_creation(self, mock_build, mock_creds):
+        """An UNTIL date before the event's own start date is nonsensical —
+        must fall back to no end date rather than blocking the post."""
+        mock_service = MagicMock()
+        mock_service.events.return_value.insert.return_value.execute.return_value = {"id": "evt-recur-2"}
+        mock_build.return_value = mock_service
+
+        event_date = timezone.localdate() + timedelta(days=7)
+        email = self._make_email("msg-recur-2")
+        parsed_action = ParsedAction.objects.create(
+            incoming_email=email,
+            action_type=ParsedAction.ActionType.CREATE_CALENDAR_EVENT,
+            title="Team standup",
+            appointment_date=event_date,
+            start_time=time(9, 0),
+            recurrence_frequency="daily",
+            recurrence_until=event_date - timedelta(days=30),
+            confidence=0.95,
+        )
+
+        outcome, extra = route_and_execute(parsed_action)
+
+        self.assertEqual(outcome, "created")
+        record = extra["calendar_event"]
+        self.assertEqual(record.recurrence_rule, "RRULE:FREQ=DAILY")
+
+        parsed_action.refresh_from_db()
+        self.assertTrue(any("ignored" in note for note in parsed_action.ambiguity_notes))
+
+    @patch("assistant.services.google_calendar.get_google_credentials")
+    @patch("assistant.services.google_calendar.build")
+    def test_no_recurrence_fields_means_a_plain_one_off_event(self, mock_build, mock_creds):
+        mock_service = MagicMock()
+        mock_service.events.return_value.insert.return_value.execute.return_value = {"id": "evt-recur-3"}
+        mock_build.return_value = mock_service
+
+        event_date = timezone.localdate() + timedelta(days=7)
+        email = self._make_email("msg-recur-3")
+        parsed_action = ParsedAction.objects.create(
+            incoming_email=email,
+            action_type=ParsedAction.ActionType.CREATE_CALENDAR_EVENT,
+            title="One-off dentist appointment",
+            appointment_date=event_date,
+            start_time=time(9, 0),
+            confidence=0.95,
+        )
+
+        outcome, extra = route_and_execute(parsed_action)
+
+        self.assertEqual(outcome, "created")
+        insert_kwargs = mock_service.events.return_value.insert.call_args.kwargs
+        self.assertNotIn("recurrence", insert_kwargs["body"])
+
+        record = extra["calendar_event"]
+        self.assertEqual(record.recurrence_rule, "")
+        self.assertEqual(record.recurrence_description, "")
+
+
 class ConfirmationReplyWordingTests(TestCase):
     """Locks in the fixed reply wording so 'the time' is never used for a
     missing end time, and reminder_recipient is never silently dropped."""

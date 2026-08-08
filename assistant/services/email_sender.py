@@ -108,6 +108,10 @@ def build_confirmation_body(outcome: str, parsed_action: ParsedAction | None = N
         if DEFAULTED_END_TIME_NOTE in notes:
             body += " No end time was given, so I scheduled it for 1 hour."
 
+        calendar_event = context.get("calendar_event")
+        if calendar_event is not None and getattr(calendar_event, "recurrence_description", ""):
+            body += f" {calendar_event.recurrence_description}."
+
         exclude_from_gaps = {"title", "appointment_date", "start_time", "end_time"}
         if outcome == "created_with_reminder" and context.get("reminder") is not None:
             reminder = context["reminder"]

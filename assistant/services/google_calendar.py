@@ -13,7 +13,7 @@ from googleapiclient.discovery import build
 
 from core.models import CalendarEventRecord, ParsedAction
 
-from .extractor import combine_date_and_time, times_are_valid
+from .extractor import build_recurrence, combine_date_and_time, times_are_valid
 from .gmail import get_google_credentials, is_authorised_sender
 
 # For calendar events specifically, a title + date is enough to post — a
@@ -34,11 +34,21 @@ def _start_time_or_all_day_str(parsed_action: ParsedAction) -> str:
     return "NONE"
 
 
-def compute_duplicate_key(title: str, appointment_date, start_time_or_all_day: str, calendar_id: str) -> str:
-    """SHA-256 of normalised-lowercase-title | date | start_time-or-ALL_DAY | calendar_id."""
+def compute_duplicate_key(
+    title: str,
+    appointment_date,
+    start_time_or_all_day: str,
+    calendar_id: str,
+    recurrence_frequency: str | None = None,
+) -> str:
+    """SHA-256 of normalised-lowercase-title | date | start_time-or-ALL_DAY |
+    calendar_id | recurrence-frequency-or-ONE_OFF. The recurrence component
+    keeps a recurring series from colliding with a coincidentally identical
+    one-off event that shares the same title/first-date/time/calendar."""
     normalised_title = " ".join((title or "").strip().lower().split())
     date_str = appointment_date.isoformat() if hasattr(appointment_date, "isoformat") else str(appointment_date or "")
-    raw = f"{normalised_title}|{date_str}|{start_time_or_all_day}|{calendar_id}"
+    recurrence_component = recurrence_frequency or "ONE_OFF"
+    raw = f"{normalised_title}|{date_str}|{start_time_or_all_day}|{calendar_id}|{recurrence_component}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
@@ -70,7 +80,11 @@ def check_for_duplicate(parsed_action: ParsedAction, calendar_id: str):
 
     # 3. Deterministic duplicate key.
     key = compute_duplicate_key(
-        parsed_action.title, parsed_action.appointment_date, _start_time_or_all_day_str(parsed_action), calendar_id
+        parsed_action.title,
+        parsed_action.appointment_date,
+        _start_time_or_all_day_str(parsed_action),
+        calendar_id,
+        parsed_action.recurrence_frequency,
     )
     candidate = CalendarEventRecord.objects.filter(duplicate_key=key).first()
     if candidate:
@@ -229,6 +243,19 @@ def create_event_for_parsed_action(parsed_action: ParsedAction) -> CalendarEvent
         description_lines.append(f"Booking reference: {parsed_action.booking_reference}")
     description = "\n".join(description_lines)
 
+    recurrence = build_recurrence(
+        parsed_action.recurrence_frequency or None,
+        parsed_action.recurrence_interval,
+        parsed_action.recurrence_days_of_week,
+        parsed_action.recurrence_until,
+        parsed_action.recurrence_count,
+        appt_date,
+        parsed_action.all_day,
+    )
+    if recurrence.note and recurrence.note not in (parsed_action.ambiguity_notes or []):
+        parsed_action.ambiguity_notes = list(parsed_action.ambiguity_notes or []) + [recurrence.note]
+        parsed_action.save(update_fields=["ambiguity_notes"])
+
     event_body = {
         "summary": title,
         "location": parsed_action.location or "",
@@ -243,11 +270,15 @@ def create_event_for_parsed_action(parsed_action: ParsedAction) -> CalendarEvent
     else:
         event_body["start"] = {"dateTime": start_dt.isoformat(), "timeZone": settings.APP_TIMEZONE}
         event_body["end"] = {"dateTime": end_dt.isoformat(), "timeZone": settings.APP_TIMEZONE}
+    if recurrence.rrule:
+        event_body["recurrence"] = [recurrence.rrule]
 
     service = build("calendar", "v3", credentials=get_google_credentials(), cache_discovery=False)
     created_event = service.events().insert(calendarId=calendar_id, body=event_body).execute()
 
-    key = compute_duplicate_key(title, appt_date, _start_time_or_all_day_str(parsed_action), calendar_id)
+    key = compute_duplicate_key(
+        title, appt_date, _start_time_or_all_day_str(parsed_action), calendar_id, parsed_action.recurrence_frequency
+    )
 
     record = CalendarEventRecord.objects.create(
         parsed_action=parsed_action,
@@ -262,6 +293,8 @@ def create_event_for_parsed_action(parsed_action: ParsedAction) -> CalendarEvent
         all_day=parsed_action.all_day,
         location=parsed_action.location or "",
         booking_reference=parsed_action.booking_reference or "",
+        recurrence_rule=recurrence.rrule or "",
+        recurrence_description=recurrence.description or "",
         duplicate_key=key,
     )
 

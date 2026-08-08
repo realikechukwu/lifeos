@@ -141,6 +141,15 @@ class ParsedAction(models.Model):
     organiser = models.CharField(max_length=255, blank=True, default="")
     booking_reference = models.CharField(max_length=255, blank=True, default="")
 
+    # Recurring calendar events: raw structured fields from extraction.
+    # Python (assistant.services.extractor.build_recurrence) assembles the
+    # actual RRULE from these — never trusted from the model directly.
+    recurrence_frequency = models.CharField(max_length=10, blank=True, default="")
+    recurrence_interval = models.PositiveIntegerField(null=True, blank=True)
+    recurrence_days_of_week = models.JSONField(default=list, blank=True)
+    recurrence_until = models.DateField(null=True, blank=True)
+    recurrence_count = models.PositiveIntegerField(null=True, blank=True)
+
     # Phase 2: tasks
     due_date = models.DateField(null=True, blank=True)
     due_time = models.TimeField(null=True, blank=True)
@@ -210,6 +219,12 @@ class CalendarEventRecord(models.Model):
 
     location = models.CharField(max_length=500, blank=True, default="")
     booking_reference = models.CharField(max_length=255, blank=True, default="")
+
+    # What was actually sent to Google in event_body["recurrence"], and a
+    # human-readable version of the same rule for the confirmation email
+    # and dashboard. Empty for a one-off event.
+    recurrence_rule = models.TextField(blank=True, default="")
+    recurrence_description = models.CharField(max_length=255, blank=True, default="")
 
     duplicate_key = models.CharField(max_length=64, blank=True, default="", db_index=True)
 

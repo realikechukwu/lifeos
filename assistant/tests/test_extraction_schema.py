@@ -54,6 +54,56 @@ class AssistantActionSchemaTests(SimpleTestCase):
                 confidence=0.9,
             )
 
+    def test_recurrence_fields_default_to_null(self):
+        extraction = AssistantAction(
+            action_type="create_calendar_event",
+            title="Dental appointment",
+            appointment_date="2026-08-18",
+            confidence=0.95,
+        )
+        self.assertIsNone(extraction.recurrence_frequency)
+        self.assertIsNone(extraction.recurrence_interval)
+        self.assertIsNone(extraction.recurrence_days_of_week)
+        self.assertIsNone(extraction.recurrence_until)
+        self.assertIsNone(extraction.recurrence_count)
+
+    def test_recurrence_frequency_is_restricted_to_closed_values(self):
+        with self.assertRaises(ValidationError):
+            AssistantAction(
+                action_type="create_calendar_event",
+                title="Bin collection",
+                appointment_date="2026-08-18",
+                recurrence_frequency="fortnightly",
+                confidence=0.9,
+            )
+
+    def test_recurrence_days_of_week_are_restricted_to_closed_values(self):
+        with self.assertRaises(ValidationError):
+            AssistantAction(
+                action_type="create_calendar_event",
+                title="Bin collection",
+                appointment_date="2026-08-18",
+                recurrence_frequency="weekly",
+                recurrence_days_of_week=["Mon"],
+                confidence=0.9,
+            )
+
+    def test_valid_recurrence_fields_are_accepted(self):
+        extraction = AssistantAction(
+            action_type="create_calendar_event",
+            title="Swimming lessons",
+            appointment_date="2026-08-18",
+            recurrence_frequency="weekly",
+            recurrence_interval=2,
+            recurrence_days_of_week=["MO", "WE"],
+            recurrence_until="2026-12-15",
+            confidence=0.9,
+        )
+        self.assertEqual(extraction.recurrence_frequency, "weekly")
+        self.assertEqual(extraction.recurrence_interval, 2)
+        self.assertEqual(extraction.recurrence_days_of_week, ["MO", "WE"])
+        self.assertEqual(extraction.recurrence_until, "2026-12-15")
+
 
 class PromptInjectionRemainsUntrustedTests(SimpleTestCase):
     def test_injection_text_is_wrapped_as_data_only(self):

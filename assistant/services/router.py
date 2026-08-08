@@ -41,6 +41,7 @@ def build_parsed_action_from_extraction(incoming_email, extraction) -> ParsedAct
     due_time = parse_24h_time(extraction.due_time)
     reminder_date = parse_iso_date(extraction.reminder_date)
     reminder_time = parse_24h_time(extraction.reminder_time)
+    recurrence_until = parse_iso_date(extraction.recurrence_until)
 
     missing_fields = list(extraction.missing_fields)
     ambiguity_notes = list(extraction.ambiguity_notes)
@@ -56,6 +57,7 @@ def build_parsed_action_from_extraction(incoming_email, extraction) -> ParsedAct
     _note_unparsable(extraction.due_time, due_time, "due time")
     _note_unparsable(extraction.reminder_date, reminder_date, "reminder date")
     _note_unparsable(extraction.reminder_time, reminder_time, "reminder time")
+    _note_unparsable(extraction.recurrence_until, recurrence_until, "recurrence end date")
 
     related_member = None
     if extraction.related_person in ("ike", "wife"):
@@ -75,6 +77,11 @@ def build_parsed_action_from_extraction(incoming_email, extraction) -> ParsedAct
         meeting_url=extraction.meeting_url or "",
         organiser=extraction.organiser or "",
         booking_reference=extraction.booking_reference or "",
+        recurrence_frequency=extraction.recurrence_frequency or "",
+        recurrence_interval=extraction.recurrence_interval,
+        recurrence_days_of_week=list(extraction.recurrence_days_of_week or []),
+        recurrence_until=recurrence_until,
+        recurrence_count=extraction.recurrence_count,
         due_date=due_date,
         due_time=due_time,
         assigned_to=extraction.assigned_to or "",

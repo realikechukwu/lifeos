@@ -69,10 +69,13 @@ def build_upcoming_feed(user, *, window_days: int = UPCOMING_WINDOW_DAYS) -> lis
     )
     for event in events:
         gcal_url = build_google_calendar_event_url(event.google_event_id, event.calendar_id)
+        title = event.title
+        if event.recurrence_description:
+            title = f"{title} — {event.recurrence_description}"
         items.append(FeedItem(
             kind="calendar_event",
             kind_label="Calendar event",
-            title=event.title,
+            title=title,
             when=_aware(event.appointment_date, event.start_time),
             when_label=_format_when(event.appointment_date, event.start_time, event.all_day),
             assignee="",
@@ -178,9 +181,12 @@ def build_calendar_feed(start: date | None, end: date | None) -> list[dict]:
             all_day = False
             fc_start = _combine_iso(event.appointment_date, event.start_time)
             fc_end = _combine_iso(event.appointment_date, event.end_time) if event.end_time else None
+        title = event.title
+        if event.recurrence_description:
+            title = f"{title} — {event.recurrence_description}"
         events.append({
             "id": f"calendar-{event.id}",
-            "title": event.title,
+            "title": title,
             "start": fc_start,
             "end": fc_end,
             "allDay": all_day,
@@ -191,6 +197,8 @@ def build_calendar_feed(start: date | None, end: date | None) -> list[dict]:
                 "location": event.location,
                 "assignee": "",
                 "googleUrl": build_google_calendar_event_url(event.google_event_id, event.calendar_id) or "",
+                "recurring": bool(event.recurrence_rule),
+                "recurrenceDescription": event.recurrence_description or "",
             },
         })
 
