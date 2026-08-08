@@ -3,7 +3,7 @@
 import html
 import logging
 import re
-from datetime import timedelta
+from datetime import date, datetime, timedelta
 
 from django.conf import settings
 from django.db import transaction
@@ -13,10 +13,14 @@ from core.models import (
     CalendarEventRecord,
     HouseholdMember,
     IncomingEmail,
+    Note,
     ParsedAction,
+    Reminder,
     Task,
+    TelegramInboxAction,
     TelegramChat,
     TelegramConversation,
+    TelegramPreference,
     TelegramUpdate,
     TelegramUser,
 )
@@ -25,6 +29,19 @@ from .router import admin_approve_and_execute, build_parsed_action_from_extracti
 from .tasks import complete_task
 from .telegram import TelegramBot
 from .telegram_extractor import extract_telegram_action
+from .telegram_inbox import (
+    cancel_reminder,
+    open_tasks,
+    pending_reminders,
+    recent_notes,
+    search_lifeos,
+    snooze_reminder,
+    today_items,
+    upcoming_events,
+    update_note_body,
+    update_task,
+)
+from .google_calendar import cancel_calendar_event, reschedule_calendar_event
 
 logger = logging.getLogger(__name__)
 
@@ -44,9 +61,11 @@ def _keyboard(*rows: list[dict]) -> dict:
 
 def main_menu() -> dict:
     return _keyboard(
+        [_button("☀️ Today", "tg:today:show"), _button("✅ Tasks", "tg:inbox:tasks:0")],
+        [_button("📅 Calendar", "tg:inbox:calendar:0"), _button("📝 Notes", "tg:inbox:notes:0")],
+        [_button("⏰ Reminders", "tg:inbox:reminders:0"), _button("⚙️ Briefing", "tg:settings:show")],
         [_button("➕ Task", "tg:new:task"), _button("📅 Event", "tg:new:event")],
         [_button("📝 Note", "tg:new:note"), _button("⏰ Reminder", "tg:new:reminder")],
-        [_button("✅ Open tasks", "tg:list:tasks"), _button("🗓 Upcoming", "tg:list:upcoming")],
     )
 
 
@@ -357,6 +376,14 @@ def _extract_and_respond(conversation: TelegramConversation, bot: TelegramBot) -
 def _handle_text(
     *, chat: TelegramChat, user: TelegramUser, text: str, update_id: int, bot: TelegramBot
 ) -> None:
+    inbox_action = TelegramInboxAction.objects.filter(
+        chat=chat,
+        requested_by=user,
+        status=TelegramInboxAction.Status.AWAITING_INPUT,
+    ).order_by("-created_at").first()
+    if inbox_action:
+        _handle_inbox_input(inbox_action, text, bot)
+        return
     active = (
         TelegramConversation.objects.filter(
             chat=chat, requested_by=user, status__in=ACTIVE_STATUSES
@@ -381,6 +408,12 @@ def _handle_text(
     if re.search(r"\b(show|list|what|which)\b.*\b(tasks?|to[- ]?do)\b", normalised):
         _list_tasks(chat.chat_id, bot)
         return
+    if re.search(r"\b(show|list|find|search)\b.*\b(notes?|reminders?)\b", normalised):
+        if "reminder" in normalised:
+            _list_reminders(chat.chat_id, bot)
+        else:
+            _list_notes(chat.chat_id, bot)
+        return
     if re.search(
         r"\b(show|list|what|anything)\b.*\b(upcoming|calendar|today|tomorrow|week|fortnight)\b",
         normalised,
@@ -391,11 +424,19 @@ def _handle_text(
     _extract_and_respond(conversation, bot)
 
 
-def _list_tasks(chat_id: int, bot: TelegramBot) -> None:
-    tasks = list(
-        Task.objects.exclude(status__in=[Task.Status.COMPLETED, Task.Status.CANCELLED])
-        .order_by("due_date", "created_at")[:10]
-    )
+def _page_keyboard(kind: str, page: int, has_next: bool, *, back: str = "tg:menu:main") -> list[list[dict]]:
+    row = []
+    if page:
+        row.append(_button("‹ Previous", f"tg:inbox:{kind}:{page - 1}"))
+    if has_next:
+        row.append(_button("Next ›", f"tg:inbox:{kind}:{page + 1}"))
+    rows = [row] if row else []
+    rows.append([_button("Back", back)])
+    return rows
+
+
+def _list_tasks(chat_id: int, bot: TelegramBot, page: int = 0) -> None:
+    tasks, page, has_next = open_tasks(page)
     if not tasks:
         bot.send_message(chat_id, "No open tasks. Nicely done.", reply_markup=main_menu())
         return
@@ -404,8 +445,11 @@ def _list_tasks(chat_id: int, bot: TelegramBot) -> None:
     for task in tasks:
         due = f" · due {task.due_date}" if task.due_date else ""
         lines.append(f"• {html.escape(task.title)}{due}")
-        rows.append([_button(f"Done: {task.title[:28]}", f"tg:done:{task.id}")])
-    rows.append([_button("Back", "tg:menu:main")])
+        rows.append([
+            _button(f"Done: {task.title[:24]}", f"tg:done:{task.id}"),
+            _button("Edit", f"tg:task:edit:{task.id}"),
+        ])
+    rows.extend(_page_keyboard("tasks", page, has_next))
     bot.send_message(chat_id, "\n".join(lines), reply_markup=_keyboard(*rows))
 
 
@@ -429,6 +473,113 @@ def _list_upcoming(chat_id: int, bot: TelegramBot) -> None:
     bot.send_message(chat_id, "\n".join(lines), reply_markup=main_menu())
 
 
+def _list_calendar(chat_id: int, bot: TelegramBot, page: int = 0) -> None:
+    events, page, has_next = upcoming_events(page)
+    if not events:
+        bot.send_message(chat_id, "No calendar events in the next 30 days.", reply_markup=main_menu())
+        return
+    lines = ["📅 <b>Upcoming calendar</b>"]
+    rows = []
+    for event in events:
+        when = "all day" if event.all_day or not event.start_time else event.start_time.strftime("%H:%M")
+        lines.append(f"• {event.appointment_date} {when} — {html.escape(event.title)}")
+        if event.recurrence_rule:
+            rows.append([_button("Why read-only?", f"tg:event:info:{event.id}")])
+        else:
+            rows.append([
+                _button("Reschedule", f"tg:event:reschedule:{event.id}"),
+                _button("Cancel event", f"tg:event:cancel:{event.id}"),
+            ])
+    rows.extend(_page_keyboard("calendar", page, has_next))
+    bot.send_message(chat_id, "\n".join(lines), reply_markup=_keyboard(*rows))
+
+
+def _list_notes(chat_id: int, bot: TelegramBot, page: int = 0, query: str = "") -> None:
+    notes, page, has_next = recent_notes(page, query)
+    heading = "📝 <b>Notes</b>" if not query else f"📝 <b>Notes matching {html.escape(query)}</b>"
+    if not notes:
+        bot.send_message(chat_id, "No notes found.", reply_markup=main_menu())
+        return
+    lines = [heading]
+    rows = []
+    for note in notes:
+        category = f" · {html.escape(note.category)}" if note.category else ""
+        lines.append(f"• {html.escape(note.title or 'Untitled note')}{category}")
+        rows.append([_button(f"View: {(note.title or 'Untitled')[:28]}", f"tg:note:view:{note.id}")])
+    rows.extend(_page_keyboard("notes", page, has_next))
+    bot.send_message(chat_id, "\n".join(lines), reply_markup=_keyboard(*rows))
+
+
+def _show_note(chat_id: int, note: Note, bot: TelegramBot) -> None:
+    body = html.escape(note.body or "(empty)")
+    text = f"📝 <b>{html.escape(note.title or 'Untitled note')}</b>\n{body}"
+    bot.send_message(
+        chat_id,
+        text,
+        reply_markup=_keyboard(
+            [_button("Edit note", f"tg:note:edit:{note.id}"), _button("Back to notes", "tg:inbox:notes:0")],
+            [_button("Main menu", "tg:menu:main")],
+        ),
+    )
+
+
+def _list_reminders(chat_id: int, bot: TelegramBot, page: int = 0) -> None:
+    reminders, page, has_next = pending_reminders(page)
+    if not reminders:
+        bot.send_message(chat_id, "No pending reminders.", reply_markup=main_menu())
+        return
+    lines = ["⏰ <b>Pending reminders</b>"]
+    rows = []
+    for reminder in reminders:
+        lines.append(
+            f"• {reminder.reminder_date} {reminder.reminder_time.strftime('%H:%M')} — {html.escape(reminder.title)}"
+        )
+        rows.append([
+            _button("Snooze 1 day", f"tg:rem:snooze:{reminder.id}"),
+            _button("Cancel", f"tg:rem:cancel:{reminder.id}"),
+        ])
+    rows.extend(_page_keyboard("reminders", page, has_next))
+    bot.send_message(chat_id, "\n".join(lines), reply_markup=_keyboard(*rows))
+
+
+def build_today_message() -> str:
+    """Public so the scheduled briefing command renders the same live view."""
+    events, tasks, reminders = today_items()
+    lines = ["☀️ <b>LifeOS today</b>"]
+    if events:
+        lines.append("\n<b>Calendar</b>")
+        lines.extend(
+            f"• {event.start_time.strftime('%H:%M') if event.start_time else 'all day'} — {html.escape(event.title)}"
+            for event in events[:5]
+        )
+    if tasks:
+        lines.append("\n<b>Tasks</b>")
+        for task in tasks[:5]:
+            prefix = "Overdue: " if task.due_date and task.due_date < timezone.localdate() else ""
+            lines.append(f"• {prefix}{html.escape(task.title)}")
+    if reminders:
+        lines.append("\n<b>Reminders</b>")
+        lines.extend(
+            f"• {reminder.reminder_time.strftime('%H:%M')} — {html.escape(reminder.title)}"
+            for reminder in reminders[:5]
+        )
+    if len(lines) == 1:
+        lines.append("Nothing scheduled or due today.")
+    return "\n".join(lines)
+
+
+def today_keyboard() -> dict:
+    return _keyboard(
+        [_button("✅ Open tasks", "tg:inbox:tasks:0"), _button("📅 Calendar", "tg:inbox:calendar:0")],
+        [_button("📝 Notes", "tg:inbox:notes:0"), _button("⏰ Reminders", "tg:inbox:reminders:0")],
+        [_button("➕ Add task", "tg:new:task")],
+    )
+
+
+def _show_today(chat_id: int, bot: TelegramBot) -> None:
+    bot.send_message(chat_id, build_today_message(), reply_markup=today_keyboard())
+
+
 def _cancel_active(chat: TelegramChat, user: TelegramUser, bot: TelegramBot) -> None:
     active = TelegramConversation.objects.filter(
         chat=chat, requested_by=user, status__in=ACTIVE_STATUSES
@@ -449,6 +600,158 @@ def _cancel_conversation(conversation: TelegramConversation, bot: TelegramBot) -
     conversation.incoming_email.save(update_fields=["status", "updated_at"])
     conversation.save(update_fields=["status", "completed_at", "updated_at"])
     bot.send_message(conversation.chat.chat_id, "Cancelled.", reply_markup=main_menu())
+
+
+def _preference_for(user: TelegramUser) -> TelegramPreference:
+    preference, _ = TelegramPreference.objects.get_or_create(user=user)
+    return preference
+
+
+def _show_settings(chat: TelegramChat, user: TelegramUser, bot: TelegramBot) -> None:
+    preference = _preference_for(user)
+    enabled = "on" if preference.briefing_enabled else "off"
+    bot.send_message(
+        chat.chat_id,
+        f"⚙️ <b>Daily briefing</b>\nStatus: <b>{enabled}</b>\nTime: <b>{preference.briefing_time:%H:%M}</b>",
+        reply_markup=_keyboard(
+            [_button("Turn off" if preference.briefing_enabled else "Turn on", "tg:settings:toggle")],
+            [_button("Change time", "tg:settings:time")],
+            [_button("Main menu", "tg:menu:main")],
+        ),
+    )
+
+
+def _start_inbox_action(
+    chat: TelegramChat, user: TelegramUser, action: str, *, object_id: int | None = None
+) -> TelegramInboxAction:
+    TelegramInboxAction.objects.filter(
+        chat=chat,
+        requested_by=user,
+        status__in=[TelegramInboxAction.Status.AWAITING_INPUT, TelegramInboxAction.Status.AWAITING_CONFIRMATION],
+    ).update(status=TelegramInboxAction.Status.CANCELLED, completed_at=timezone.now())
+    return TelegramInboxAction.objects.create(
+        chat=chat, requested_by=user, action=action, object_id=object_id
+    )
+
+
+def _action_keyboard(inbox_action: TelegramInboxAction) -> dict:
+    return _keyboard(
+        [_button("Confirm", f"tg:ia:confirm:{inbox_action.id}"), _button("Cancel", f"tg:ia:cancel:{inbox_action.id}")]
+    )
+
+
+def _parse_task_edit(value: str, task: Task) -> dict:
+    """Parse a deliberately explicit Telegram task-edit format without an LLM."""
+    parts = [part.strip() for part in value.split("|")]
+    title = parts[0] if parts else ""
+    if not title:
+        raise ValueError("Start with the task title.")
+    due_date = task.due_date
+    assigned_to = task.assigned_to
+    if len(parts) > 1 and parts[1]:
+        due_date = None if parts[1].lower() in {"none", "no due date"} else date.fromisoformat(parts[1])
+    if len(parts) > 2 and parts[2]:
+        assigned_to = parts[2].lower()
+    if len(parts) > 3:
+        raise ValueError("Use: title | YYYY-MM-DD or none | ike/wife/both/unassigned")
+    return {"title": title, "due_date": due_date.isoformat() if due_date else "", "assigned_to": assigned_to}
+
+
+def _handle_inbox_input(inbox_action: TelegramInboxAction, text: str, bot: TelegramBot) -> None:
+    try:
+        if inbox_action.action == TelegramInboxAction.Action.EDIT_NOTE:
+            note = Note.objects.get(pk=inbox_action.object_id)
+            body = text.strip()
+            if not body:
+                raise ValueError("A note cannot be empty.")
+            inbox_action.proposed_data = {"body": body}
+            prompt = f"Replace <b>{html.escape(note.title or 'this note')}</b> with:\n{html.escape(body)}\n\nIs this right?"
+        elif inbox_action.action == TelegramInboxAction.Action.EDIT_TASK:
+            task = Task.objects.get(pk=inbox_action.object_id)
+            inbox_action.proposed_data = _parse_task_edit(text, task)
+            data = inbox_action.proposed_data
+            due = data["due_date"] or "no due date"
+            prompt = (
+                f"Update task to <b>{html.escape(data['title'])}</b>\n"
+                f"Due: {due}\nFor: {html.escape(data['assigned_to'])}\n\nIs this right?"
+            )
+        elif inbox_action.action == TelegramInboxAction.Action.RESCHEDULE_EVENT:
+            raw = text.strip()
+            try:
+                parsed = datetime.strptime(raw, "%Y-%m-%d %H:%M")
+                appointment_date, start_time = parsed.date(), parsed.time()
+            except ValueError:
+                appointment_date, start_time = date.fromisoformat(raw), None
+            if appointment_date < timezone.localdate():
+                raise ValueError("Choose today or a future date.")
+            event = CalendarEventRecord.objects.get(pk=inbox_action.object_id)
+            inbox_action.proposed_data = {
+                "appointment_date": appointment_date.isoformat(),
+                "start_time": start_time.strftime("%H:%M") if start_time else "",
+            }
+            when = appointment_date.isoformat() + (f" at {start_time:%H:%M}" if start_time else " (all day)")
+            prompt = f"Reschedule <b>{html.escape(event.title)}</b> to <b>{when}</b>?"
+        elif inbox_action.action == TelegramInboxAction.Action.SET_BRIEFING_TIME:
+            parsed_time = datetime.strptime(text.strip(), "%H:%M").time()
+            inbox_action.proposed_data = {"briefing_time": parsed_time.strftime("%H:%M")}
+            prompt = f"Send your daily briefing at <b>{parsed_time:%H:%M}</b>?"
+        else:
+            raise ValueError("That inbox action is no longer supported.")
+    except (Note.DoesNotExist, Task.DoesNotExist, CalendarEventRecord.DoesNotExist):
+        inbox_action.status = TelegramInboxAction.Status.CANCELLED
+        inbox_action.completed_at = timezone.now()
+        inbox_action.save(update_fields=["status", "completed_at", "updated_at"])
+        bot.send_message(inbox_action.chat.chat_id, "That item is no longer available.", reply_markup=main_menu())
+        return
+    except ValueError as exc:
+        bot.send_message(inbox_action.chat.chat_id, f"{html.escape(str(exc))}\nPlease try again.")
+        return
+
+    inbox_action.status = TelegramInboxAction.Status.AWAITING_CONFIRMATION
+    inbox_action.save(update_fields=["proposed_data", "status", "updated_at"])
+    bot.send_message(inbox_action.chat.chat_id, prompt, reply_markup=_action_keyboard(inbox_action))
+
+
+def _confirm_inbox_action(inbox_action: TelegramInboxAction, bot: TelegramBot) -> None:
+    if inbox_action.status != TelegramInboxAction.Status.AWAITING_CONFIRMATION:
+        bot.send_message(inbox_action.chat.chat_id, "That change has already been handled.")
+        return
+    data = inbox_action.proposed_data
+    try:
+        if inbox_action.action == TelegramInboxAction.Action.EDIT_NOTE:
+            note = update_note_body(Note.objects.get(pk=inbox_action.object_id), data["body"])
+            message = f"📝 Updated <b>{html.escape(note.title or 'note')}</b>."
+        elif inbox_action.action == TelegramInboxAction.Action.EDIT_TASK:
+            task = update_task(
+                Task.objects.get(pk=inbox_action.object_id),
+                title=data["title"],
+                due_date=date.fromisoformat(data["due_date"]) if data["due_date"] else None,
+                assigned_to=data["assigned_to"],
+            )
+            message = f"✅ Updated <b>{html.escape(task.title)}</b>."
+        elif inbox_action.action == TelegramInboxAction.Action.RESCHEDULE_EVENT:
+            event = reschedule_calendar_event(
+                CalendarEventRecord.objects.get(pk=inbox_action.object_id),
+                appointment_date=date.fromisoformat(data["appointment_date"]),
+                start_time=datetime.strptime(data["start_time"], "%H:%M").time() if data["start_time"] else None,
+            )
+            message = f"📅 Rescheduled <b>{html.escape(event.title)}</b>."
+        elif inbox_action.action == TelegramInboxAction.Action.SET_BRIEFING_TIME:
+            preference = _preference_for(inbox_action.requested_by)
+            preference.briefing_time = datetime.strptime(data["briefing_time"], "%H:%M").time()
+            preference.save(update_fields=["briefing_time", "updated_at"])
+            message = f"☀️ Daily briefing time set to <b>{preference.briefing_time:%H:%M}</b>."
+        else:
+            raise ValueError("That inbox action is no longer supported.")
+    except (Note.DoesNotExist, Task.DoesNotExist, CalendarEventRecord.DoesNotExist):
+        message = "That item is no longer available. No change was made."
+    except (KeyError, ValueError) as exc:
+        message = f"I couldn’t make that change safely: {html.escape(str(exc))}"
+    else:
+        inbox_action.status = TelegramInboxAction.Status.COMPLETED
+        inbox_action.completed_at = timezone.now()
+        inbox_action.save(update_fields=["status", "completed_at", "updated_at"])
+    bot.send_message(inbox_action.chat.chat_id, message, reply_markup=main_menu())
 
 
 def _outcome_text(outcome: str, extra: dict) -> str:
@@ -508,7 +811,7 @@ def _confirm_conversation(conversation: TelegramConversation, bot: TelegramBot) 
 
 
 def _handle_command(
-    command: str, *, chat: TelegramChat, user: TelegramUser, bot: TelegramBot
+    command: str, *, command_text: str = "", chat: TelegramChat, user: TelegramUser, bot: TelegramBot
 ) -> bool:
     command = command.split("@", 1)[0].lower()
     if command == "/linkgroup":
@@ -533,13 +836,56 @@ def _handle_command(
     if command == "/tasks":
         _list_tasks(chat.chat_id, bot)
         return True
-    if command in ("/upcoming", "/calendar"):
+    if command == "/today":
+        _show_today(chat.chat_id, bot)
+        return True
+    if command == "/calendar":
+        _list_calendar(chat.chat_id, bot)
+        return True
+    if command == "/notes":
+        _list_notes(chat.chat_id, bot)
+        return True
+    if command == "/reminders":
+        _list_reminders(chat.chat_id, bot)
+        return True
+    if command == "/settings":
+        _show_settings(chat, user, bot)
+        return True
+    if command == "/search":
+        query = command_text.split(maxsplit=1)[1].strip() if len(command_text.split(maxsplit=1)) > 1 else ""
+        _search_lifeos(chat.chat_id, query, bot)
+        return True
+    if command == "/upcoming":
         _list_upcoming(chat.chat_id, bot)
         return True
     if command == "/cancel":
         _cancel_active(chat, user, bot)
         return True
     return False
+
+
+def _search_lifeos(chat_id: int, query: str, bot: TelegramBot) -> None:
+    if not query:
+        bot.send_message(chat_id, "Use <b>/search words</b> to search open tasks and notes.", reply_markup=main_menu())
+        return
+    tasks, notes = search_lifeos(query)
+    if not tasks and not notes:
+        bot.send_message(chat_id, f"No open tasks or notes match <b>{html.escape(query)}</b>.", reply_markup=main_menu())
+        return
+    lines = [f"🔎 <b>Results for {html.escape(query)}</b>"]
+    rows = []
+    if tasks:
+        lines.append("\n<b>Tasks</b>")
+        for task in tasks:
+            lines.append(f"• ✅ {html.escape(task.title)}")
+            rows.append([_button(f"Done: {task.title[:24]}", f"tg:done:{task.id}")])
+    if notes:
+        lines.append("\n<b>Notes</b>")
+        for note in notes:
+            lines.append(f"• 📝 {html.escape(note.title or 'Untitled note')}")
+            rows.append([_button(f"View: {(note.title or 'Untitled')[:24]}", f"tg:note:view:{note.id}")])
+    rows.append([_button("Main menu", "tg:menu:main")])
+    bot.send_message(chat_id, "\n".join(lines), reply_markup=_keyboard(*rows))
 
 
 def _handle_callback(data: str, chat: TelegramChat, user: TelegramUser, bot: TelegramBot) -> None:
@@ -550,6 +896,127 @@ def _handle_callback(data: str, chat: TelegramChat, user: TelegramUser, bot: Tel
     target = parts[2]
     if action == "menu":
         bot.send_message(chat.chat_id, "What would you like to do?", reply_markup=main_menu())
+        return
+    if action == "today":
+        _show_today(chat.chat_id, bot)
+        return
+    if action == "inbox" and len(parts) == 4:
+        try:
+            page = max(int(parts[3]), 0)
+        except ValueError:
+            return
+        if target == "tasks":
+            _list_tasks(chat.chat_id, bot, page)
+        elif target == "calendar":
+            _list_calendar(chat.chat_id, bot, page)
+        elif target == "notes":
+            _list_notes(chat.chat_id, bot, page)
+        elif target == "reminders":
+            _list_reminders(chat.chat_id, bot, page)
+        return
+    if action == "settings":
+        if target == "show":
+            _show_settings(chat, user, bot)
+        elif target == "toggle":
+            preference = _preference_for(user)
+            preference.briefing_enabled = not preference.briefing_enabled
+            preference.save(update_fields=["briefing_enabled", "updated_at"])
+            _show_settings(chat, user, bot)
+        elif target == "time":
+            _start_inbox_action(chat, user, TelegramInboxAction.Action.SET_BRIEFING_TIME)
+            bot.send_message(chat.chat_id, "What time should I send your daily briefing? Use <b>HH:MM</b>, for example <b>07:30</b>.")
+        return
+    if action == "note" and len(parts) == 4:
+        try:
+            note = Note.objects.get(pk=int(parts[3]))
+        except (ValueError, Note.DoesNotExist):
+            bot.send_message(chat.chat_id, "That note is no longer available.", reply_markup=main_menu())
+            return
+        if target == "view":
+            _show_note(chat.chat_id, note, bot)
+        elif target == "edit":
+            _start_inbox_action(chat, user, TelegramInboxAction.Action.EDIT_NOTE, object_id=note.id)
+            bot.send_message(chat.chat_id, f"Send the replacement text for <b>{html.escape(note.title or 'this note')}</b>.")
+        return
+    if action == "task" and target == "edit" and len(parts) == 4:
+        try:
+            task = Task.objects.get(pk=int(parts[3]))
+        except (ValueError, Task.DoesNotExist):
+            bot.send_message(chat.chat_id, "That task is no longer available.", reply_markup=main_menu())
+            return
+        _start_inbox_action(chat, user, TelegramInboxAction.Action.EDIT_TASK, object_id=task.id)
+        due = task.due_date.isoformat() if task.due_date else "none"
+        bot.send_message(
+            chat.chat_id,
+            "Send: <b>title | YYYY-MM-DD or none | ike/wife/both/unassigned</b>\n"
+            f"Current: <b>{html.escape(task.title)}</b> | {due} | {html.escape(task.assigned_to)}",
+        )
+        return
+    if action == "rem" and len(parts) == 4:
+        try:
+            reminder = Reminder.objects.get(pk=int(parts[3]))
+            if target == "snooze":
+                snooze_reminder(reminder)
+                bot.send_message(chat.chat_id, f"⏰ Snoozed <b>{html.escape(reminder.title)}</b> by one day.", reply_markup=main_menu())
+            elif target == "cancel":
+                cancel_reminder(reminder)
+                bot.send_message(chat.chat_id, f"⏰ Cancelled <b>{html.escape(reminder.title)}</b>.", reply_markup=main_menu())
+        except (ValueError, Reminder.DoesNotExist) as exc:
+            bot.send_message(chat.chat_id, html.escape(str(exc) or "That reminder is no longer available."), reply_markup=main_menu())
+        return
+    if action == "event" and len(parts) == 4:
+        try:
+            event = CalendarEventRecord.objects.get(pk=int(parts[3]))
+        except (ValueError, CalendarEventRecord.DoesNotExist):
+            bot.send_message(chat.chat_id, "That calendar event is no longer available.", reply_markup=main_menu())
+            return
+        if target == "reschedule":
+            if event.recurrence_rule:
+                bot.send_message(chat.chat_id, "For a recurring event, use Google Calendar so you can choose whether to change one occurrence or the whole series.")
+            else:
+                _start_inbox_action(chat, user, TelegramInboxAction.Action.RESCHEDULE_EVENT, object_id=event.id)
+                bot.send_message(chat.chat_id, "Send the new date/time as <b>YYYY-MM-DD HH:MM</b>, for example <b>2026-08-20 14:30</b>. Send just <b>YYYY-MM-DD</b> for an all-day event.")
+        elif target == "cancel":
+            if event.recurrence_rule:
+                bot.send_message(chat.chat_id, "For a recurring event, use Google Calendar so you can choose whether to cancel one occurrence or the whole series.")
+            else:
+                inbox_action = _start_inbox_action(chat, user, TelegramInboxAction.Action.CANCEL_EVENT, object_id=event.id)
+                inbox_action.proposed_data = {"cancel": True}
+                inbox_action.status = TelegramInboxAction.Status.AWAITING_CONFIRMATION
+                inbox_action.save(update_fields=["proposed_data", "status", "updated_at"])
+                bot.send_message(chat.chat_id, f"Cancel <b>{html.escape(event.title)}</b> from Google Calendar?", reply_markup=_action_keyboard(inbox_action))
+        elif target == "info":
+            bot.send_message(chat.chat_id, "Recurring events are read-only in Telegram for now. Use Google Calendar to change one occurrence or the whole series.", reply_markup=main_menu())
+        return
+    if action == "ia" and len(parts) == 4:
+        try:
+            inbox_action = TelegramInboxAction.objects.get(
+                pk=int(parts[3]), chat=chat, requested_by=user
+            )
+        except (ValueError, TelegramInboxAction.DoesNotExist):
+            bot.send_message(chat.chat_id, "That change is no longer available.")
+            return
+        if target == "confirm":
+            if inbox_action.proposed_data.get("cancel"):
+                try:
+                    event = CalendarEventRecord.objects.get(pk=inbox_action.object_id)
+                    cancel_calendar_event(event)
+                except (CalendarEventRecord.DoesNotExist, ValueError) as exc:
+                    bot.send_message(chat.chat_id, html.escape(str(exc) or "That event is no longer available."), reply_markup=main_menu())
+                else:
+                    inbox_action.status = TelegramInboxAction.Status.COMPLETED
+                    inbox_action.completed_at = timezone.now()
+                    inbox_action.save(update_fields=["status", "completed_at", "updated_at"])
+                    bot.send_message(chat.chat_id, "📅 Calendar event cancelled.", reply_markup=main_menu())
+            else:
+                _confirm_inbox_action(inbox_action, bot)
+        elif target == "cancel" and inbox_action.status in [
+            TelegramInboxAction.Status.AWAITING_INPUT, TelegramInboxAction.Status.AWAITING_CONFIRMATION
+        ]:
+            inbox_action.status = TelegramInboxAction.Status.CANCELLED
+            inbox_action.completed_at = timezone.now()
+            inbox_action.save(update_fields=["status", "completed_at", "updated_at"])
+            bot.send_message(chat.chat_id, "Cancelled.", reply_markup=main_menu())
         return
     if action == "new":
         prompts = {
@@ -580,7 +1047,7 @@ def _handle_callback(data: str, chat: TelegramChat, user: TelegramUser, bot: Tel
         return
     conversation = TelegramConversation.objects.select_related(
         "chat", "requested_by", "incoming_email", "parsed_action"
-    ).filter(pk=conversation_id, chat=chat).first()
+    ).filter(pk=conversation_id, chat=chat, requested_by=user).first()
     if not conversation:
         bot.send_message(chat.chat_id, "That request is no longer available.")
         return
@@ -656,7 +1123,7 @@ def process_telegram_update(payload: dict, *, bot: TelegramBot | None = None) ->
         if text:
             command_match = re.match(r"^(/[^\s]+)", text)
             handled = command_match and _handle_command(
-                command_match.group(1), chat=chat, user=user, bot=bot
+                command_match.group(1), command_text=text, chat=chat, user=user, bot=bot
             )
             if not handled and chat.authorised:
                 _handle_text(chat=chat, user=user, text=text, update_id=update_id, bot=bot)

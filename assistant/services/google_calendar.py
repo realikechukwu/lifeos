@@ -11,7 +11,7 @@ from django.conf import settings
 from django.utils import timezone
 from googleapiclient.discovery import build
 
-from core.models import CalendarEventRecord, ParsedAction
+from core.models import AuditLog, CalendarEventRecord, ParsedAction, Reminder
 
 from .extractor import build_recurrence, combine_date_and_time, times_are_valid
 from .gmail import get_google_credentials, is_authorised_sender
@@ -304,3 +304,96 @@ def create_event_for_parsed_action(parsed_action: ParsedAction) -> CalendarEvent
     parsed_action.save(update_fields=["duplicate_key", "status", "executed_at"])
 
     return record
+
+
+def reschedule_calendar_event(
+    record: CalendarEventRecord, *, appointment_date, start_time=None, source_email=None
+) -> CalendarEventRecord:
+    """Move a one-off event in Google Calendar and mirror the result locally.
+
+    Recurring series are intentionally excluded: moving an individual
+    occurrence versus the whole series has materially different meaning and
+    should be handled in Google Calendar until LifeOS has an explicit series
+    editor.
+    """
+    if record.recurrence_rule:
+        raise ValueError("Recurring events must be rescheduled in Google Calendar.")
+    if appointment_date < timezone.localdate():
+        raise ValueError("An event cannot be rescheduled into the past.")
+    if not record.google_event_id or not record.calendar_id:
+        raise ValueError("This calendar event is missing its Google Calendar reference.")
+
+    all_day = start_time is None
+    if all_day:
+        body = {
+            "start": {"date": appointment_date.isoformat()},
+            "end": {"date": (appointment_date + timedelta(days=1)).isoformat()},
+        }
+        end_time = None
+    else:
+        duration = timedelta(hours=1)
+        if record.start_time and record.end_time:
+            original_start = combine_date_and_time(record.appointment_date, record.start_time)
+            original_end = combine_date_and_time(record.appointment_date, record.end_time)
+            if original_end > original_start:
+                duration = original_end - original_start
+        start_dt = combine_date_and_time(appointment_date, start_time)
+        end_dt = start_dt + duration
+        body = {
+            "start": {"dateTime": start_dt.isoformat(), "timeZone": record.timezone or settings.APP_TIMEZONE},
+            "end": {"dateTime": end_dt.isoformat(), "timeZone": record.timezone or settings.APP_TIMEZONE},
+        }
+        end_time = end_dt.time()
+
+    service = build("calendar", "v3", credentials=get_google_credentials(), cache_discovery=False)
+    service.events().patch(
+        calendarId=record.calendar_id, eventId=record.google_event_id, body=body
+    ).execute()
+
+    record.appointment_date = appointment_date
+    record.start_time = start_time
+    record.end_time = end_time
+    record.all_day = all_day
+    record.duplicate_key = compute_duplicate_key(
+        record.title,
+        appointment_date,
+        "ALL_DAY" if all_day else start_time.strftime("%H:%M"),
+        record.calendar_id,
+    )
+    record.save(update_fields=[
+        "appointment_date", "start_time", "end_time", "all_day", "duplicate_key", "updated_at"
+    ])
+    AuditLog.objects.create(
+        source_email=source_email,
+        action="calendar_event_rescheduled",
+        object_type="CalendarEventRecord",
+        object_id=str(record.id),
+        success=True,
+        details={"title": record.title, "appointment_date": str(appointment_date), "start_time": str(start_time or "")},
+    )
+    return record
+
+
+def cancel_calendar_event(record: CalendarEventRecord, *, source_email=None) -> None:
+    """Delete a one-off Google Calendar event and cancel any unsent linked reminders."""
+    if record.recurrence_rule:
+        raise ValueError("Recurring events must be cancelled in Google Calendar.")
+    if not record.google_event_id or not record.calendar_id:
+        raise ValueError("This calendar event is missing its Google Calendar reference.")
+
+    service = build("calendar", "v3", credentials=get_google_credentials(), cache_discovery=False)
+    service.events().delete(calendarId=record.calendar_id, eventId=record.google_event_id).execute()
+    Reminder.objects.filter(
+        related_calendar_event=record, status__in=[Reminder.Status.PENDING, Reminder.Status.FAILED]
+    ).update(status=Reminder.Status.CANCELLED)
+    record_id = record.id
+    title = record.title
+    record.delete()
+    AuditLog.objects.create(
+        source_email=source_email,
+        action="calendar_event_cancelled",
+        object_type="CalendarEventRecord",
+        object_id=str(record_id),
+        success=True,
+        details={"title": title},
+    )

@@ -115,10 +115,28 @@ group. Alternatively, put the group's negative numeric id in
 `TELEGRAM_ALLOWED_GROUP_CHAT_IDS`. BotFather's Group Privacy must be off for
 ordinary group messages rather than commands only.
 
-Useful commands are `/tasks`, `/upcoming`, `/cancel`, `/help`, and
-`/linkgroup`. The inline menu also provides buttons for new tasks, events,
-notes, reminders, and one-tap task completion. Scheduled reminders created
-through Telegram continue to use the established Gmail reminder delivery.
+Useful commands are `/today`, `/tasks`, `/calendar`, `/notes`, `/reminders`,
+`/search <words>`, `/settings`, `/upcoming`, `/cancel`, `/help`, and `/linkgroup`. The inline
+menu provides a paginated LifeOS inbox: browse tasks, notes, reminders, and
+calendar events; complete/edit tasks; view/edit notes; snooze/cancel
+reminders; and reschedule/cancel one-off calendar events with a final
+confirmation. Recurring events remain read-only in Telegram so a person can
+choose the correct single-occurrence or whole-series operation in Google
+Calendar. Scheduled reminders created through Telegram continue to use the
+established Gmail reminder delivery.
+
+### Daily Telegram briefing
+
+After an authorised user has started the bot privately, LifeOS sends a daily
+private briefing at 07:30 local app time by default. It contains that day's
+calendar, overdue/due tasks, and pending reminders, with links into the inbox.
+Users can switch it on/off or change its time with `/settings`. Run
+`send_telegram_briefings` every minute using the supplied systemd timer; a
+per-user/day record prevents duplicates.
+
+```bash
+python manage.py send_telegram_briefings
+```
 
 Keep the Bot API token and webhook secret only in the server environment. If
 a token is ever pasted into chat, logs, or source control, regenerate it in

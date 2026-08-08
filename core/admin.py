@@ -14,6 +14,9 @@ from .models import (
     Reminder,
     Task,
     TelegramChat,
+    TelegramBriefingDelivery,
+    TelegramInboxAction,
+    TelegramPreference,
     TelegramConversation,
     TelegramUpdate,
     TelegramUser,
@@ -38,6 +41,22 @@ class TelegramUserAdmin(admin.ModelAdmin):
     readonly_fields = ("user_id", "role", "username", "display_name", "created_at", "updated_at")
 
 
+@admin.register(TelegramPreference)
+class TelegramPreferenceAdmin(admin.ModelAdmin):
+    list_display = ("user", "briefing_enabled", "briefing_time", "updated_at")
+    list_filter = ("briefing_enabled",)
+    search_fields = ("user__display_name", "user__username", "user__user_id")
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(TelegramBriefingDelivery)
+class TelegramBriefingDeliveryAdmin(admin.ModelAdmin):
+    list_display = ("user", "briefing_date", "sent_at")
+    list_filter = ("briefing_date",)
+    search_fields = ("user__display_name", "user__username", "user__user_id")
+    readonly_fields = ("user", "briefing_date", "sent_at")
+
+
 @admin.register(TelegramChat)
 class TelegramChatAdmin(admin.ModelAdmin):
     list_display = ("title", "chat_id", "chat_type", "authorised", "updated_at")
@@ -60,6 +79,14 @@ class TelegramConversationAdmin(admin.ModelAdmin):
     list_filter = ("status",)
     search_fields = ("chat__title", "requested_by__display_name", "incoming_email__body_text")
     readonly_fields = [field.name for field in TelegramConversation._meta.fields]
+
+
+@admin.register(TelegramInboxAction)
+class TelegramInboxActionAdmin(admin.ModelAdmin):
+    list_display = ("id", "action", "status", "chat", "requested_by", "object_id", "updated_at")
+    list_filter = ("action", "status")
+    search_fields = ("chat__title", "requested_by__display_name", "object_id")
+    readonly_fields = [field.name for field in TelegramInboxAction._meta.fields]
 
 
 @admin.register(IncomingEmail)

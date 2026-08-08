@@ -35,7 +35,13 @@ class Command(BaseCommand):
         bot.set_commands(
             [
                 {"command": "start", "description": "Open the LifeOS menu"},
+                {"command": "today", "description": "Show today's LifeOS view"},
                 {"command": "tasks", "description": "Show open tasks"},
+                {"command": "calendar", "description": "Show upcoming calendar events"},
+                {"command": "notes", "description": "Browse recent notes"},
+                {"command": "reminders", "description": "Show pending reminders"},
+                {"command": "search", "description": "Search open tasks and notes"},
+                {"command": "settings", "description": "Manage daily briefing"},
                 {"command": "upcoming", "description": "Show the next 14 days"},
                 {"command": "cancel", "description": "Cancel your pending request"},
                 {"command": "linkgroup", "description": "Link the family group (owner only)"},

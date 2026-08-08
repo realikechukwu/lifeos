@@ -1,0 +1,16 @@
+[Unit]
+Description=Family Assistant — send due Telegram daily briefings
+After=network.target
+
+[Service]
+Type=oneshot
+User=<LINUX_USERNAME>
+Group=<LINUX_USERNAME>
+WorkingDirectory=<PROJECT_PATH>
+EnvironmentFile=<ENV_FILE_PATH>
+Environment=DJANGO_SETTINGS_MODULE=config.settings.production
+ExecStart=<VENV_PATH>/bin/python manage.py send_telegram_briefings
+
+TimeoutStartSec=120
+NoNewPrivileges=true
+PrivateTmp=true

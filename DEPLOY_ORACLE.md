@@ -203,13 +203,17 @@ sudo cp deploy/systemd/lifeassistant-gmail.service /etc/systemd/system/
 sudo cp deploy/systemd/lifeassistant-gmail.timer /etc/systemd/system/
 sudo cp deploy/systemd/lifeassistant-reminders.service /etc/systemd/system/
 sudo cp deploy/systemd/lifeassistant-reminders.timer /etc/systemd/system/
+sudo cp deploy/systemd/lifeassistant-telegram-briefings.service /etc/systemd/system/
+sudo cp deploy/systemd/lifeassistant-telegram-briefings.timer /etc/systemd/system/
 
 sudo nano /etc/systemd/system/lifeassistant-gmail.service       # fill in <PLACEHOLDER>s
 sudo nano /etc/systemd/system/lifeassistant-reminders.service   # fill in <PLACEHOLDER>s
+sudo nano /etc/systemd/system/lifeassistant-telegram-briefings.service   # fill in <PLACEHOLDER>s
 
 sudo systemctl daemon-reload
 sudo systemctl enable lifeassistant-gmail.timer
 sudo systemctl enable lifeassistant-reminders.timer
+sudo systemctl enable lifeassistant-telegram-briefings.timer
 ```
 
 Each timer fires its `.service` about once a minute. Systemd will not start
@@ -353,6 +357,7 @@ DJANGO_SECURE_SSL_REDIRECT=True
 sudo systemctl start lifeassistant-web
 sudo systemctl start lifeassistant-gmail.timer
 sudo systemctl start lifeassistant-reminders.timer
+sudo systemctl start lifeassistant-telegram-briefings.timer
 sudo systemctl status lifeassistant-web --no-pager
 ```
 
@@ -362,6 +367,7 @@ sudo systemctl status lifeassistant-web --no-pager
 sudo journalctl -u lifeassistant-web -f
 sudo journalctl -u lifeassistant-gmail.service -n 50 --no-pager
 sudo journalctl -u lifeassistant-reminders.service -n 50 --no-pager
+sudo journalctl -u lifeassistant-telegram-briefings.service -n 50 --no-pager
 
 # Path A only:
 sudo tail -f /var/log/nginx/error.log

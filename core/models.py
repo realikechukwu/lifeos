@@ -1,4 +1,5 @@
 import json
+from datetime import time
 
 from cryptography.fernet import Fernet, InvalidToken
 from django.conf import settings
@@ -413,6 +414,37 @@ class TelegramUser(models.Model):
         return self.display_name or f"Telegram user {self.user_id}"
 
 
+class TelegramPreference(models.Model):
+    """Private Telegram briefing preferences for an authorised household user."""
+
+    user = models.OneToOneField(TelegramUser, on_delete=models.CASCADE, related_name="preference")
+    briefing_enabled = models.BooleanField(default=True)
+    briefing_time = models.TimeField(default=time(7, 30))
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        state = "on" if self.briefing_enabled else "off"
+        return f"Telegram briefing for {self.user} ({state} at {self.briefing_time:%H:%M})"
+
+
+class TelegramBriefingDelivery(models.Model):
+    """Idempotency record for one user's private daily Telegram briefing."""
+
+    user = models.ForeignKey(TelegramUser, on_delete=models.CASCADE, related_name="briefing_deliveries")
+    briefing_date = models.DateField()
+    sent_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-briefing_date", "-sent_at"]
+        constraints = [
+            models.UniqueConstraint(fields=["user", "briefing_date"], name="telegram_one_briefing_per_day"),
+        ]
+
+    def __str__(self):
+        return f"Telegram briefing for {self.user} on {self.briefing_date}"
+
+
 class TelegramChat(models.Model):
     class ChatType(models.TextChoices):
         PRIVATE = "private", "Private"
@@ -503,6 +535,45 @@ class TelegramConversation(models.Model):
 
     def __str__(self):
         return f"Telegram conversation {self.id} ({self.get_status_display()})"
+
+
+class TelegramInboxAction(models.Model):
+    """A short, explicit state machine for inbox edits made inside Telegram.
+
+    It is deliberately separate from ``TelegramConversation``: inbox actions
+    operate on already-existing LifeOS records and never enter the email/LLM
+    extraction pipeline.
+    """
+
+    class Action(models.TextChoices):
+        EDIT_NOTE = "edit_note", "Edit note"
+        EDIT_TASK = "edit_task", "Edit task"
+        RESCHEDULE_EVENT = "reschedule_event", "Reschedule event"
+        CANCEL_EVENT = "cancel_event", "Cancel event"
+        SET_BRIEFING_TIME = "set_briefing_time", "Set briefing time"
+
+    class Status(models.TextChoices):
+        AWAITING_INPUT = "awaiting_input", "Awaiting input"
+        AWAITING_CONFIRMATION = "awaiting_confirmation", "Awaiting confirmation"
+        COMPLETED = "completed", "Completed"
+        CANCELLED = "cancelled", "Cancelled"
+
+    chat = models.ForeignKey(TelegramChat, on_delete=models.CASCADE, related_name="inbox_actions")
+    requested_by = models.ForeignKey(TelegramUser, on_delete=models.PROTECT, related_name="inbox_actions")
+    action = models.CharField(max_length=30, choices=Action.choices)
+    object_id = models.PositiveBigIntegerField(null=True, blank=True)
+    status = models.CharField(max_length=30, choices=Status.choices, default=Status.AWAITING_INPUT)
+    proposed_data = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=["chat", "requested_by", "status"])]
+
+    def __str__(self):
+        return f"Telegram inbox action {self.id} ({self.get_action_display()})"
 
 
 class GoogleCredential(models.Model):
