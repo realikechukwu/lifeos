@@ -8,12 +8,13 @@ reads and re-labels data that Phase 1/2 already produced
 
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from django.urls import reverse
 from django.utils import timezone
 
 from assistant.services.google_calendar import build_google_calendar_event_url
-from core.models import CalendarEventRecord, ParsedAction, Reminder, Task
+from core.models import CalendarEventRecord, ParsedAction, PatchworkShift, Reminder, Task
 
 UPCOMING_WINDOW_DAYS = 30
 
@@ -40,9 +41,18 @@ def _format_when(d: date | None, t: time | None, all_day: bool) -> str:
     return label
 
 
+def _shift_local_datetime(shift: PatchworkShift) -> datetime:
+    """Render stored UTC shift times in their source timezone."""
+    try:
+        source_zone = ZoneInfo(shift.timezone)
+    except ZoneInfoNotFoundError:
+        source_zone = timezone.get_current_timezone()
+    return timezone.localtime(shift.starts_at, source_zone)
+
+
 @dataclass
 class FeedItem:
-    kind: str            # calendar_event | task_due | task_overdue | reminder | review
+    kind: str            # calendar_event | work_shift | task_due | task_overdue | reminder | review
     kind_label: str
     title: str
     when: datetime | None
@@ -81,6 +91,28 @@ def build_upcoming_feed(user, *, window_days: int = UPCOMING_WINDOW_DAYS) -> lis
             assignee="",
             status="Scheduled",
             location=event.location,
+            detail_url=None,
+            extra_links=[("Open in Google Calendar", gcal_url)] if gcal_url else [],
+        ))
+
+    work_shifts = PatchworkShift.objects.filter(active=True)
+    start_of_window = _aware(today)
+    end_of_window = _aware(horizon + timedelta(days=1))
+    work_shifts = work_shifts.filter(starts_at__gte=start_of_window, starts_at__lt=end_of_window)
+    for shift in work_shifts:
+        local_start = _shift_local_datetime(shift)
+        gcal_url = build_google_calendar_event_url(shift.google_event_id, shift.calendar_id)
+        items.append(FeedItem(
+            kind="work_shift",
+            kind_label="Ike work shift",
+            title="Ike work shift",
+            when=shift.starts_at,
+            when_label=_format_when(
+                local_start.date(), local_start.timetz().replace(tzinfo=None), shift.all_day
+            ),
+            assignee="Ike",
+            status="Scheduled",
+            location="",
             detail_url=None,
             extra_links=[("Open in Google Calendar", gcal_url)] if gcal_url else [],
         ))
@@ -199,6 +231,37 @@ def build_calendar_feed(start: date | None, end: date | None) -> list[dict]:
                 "googleUrl": build_google_calendar_event_url(event.google_event_id, event.calendar_id) or "",
                 "recurring": bool(event.recurrence_rule),
                 "recurrenceDescription": event.recurrence_description or "",
+            },
+        })
+
+    work_shift_qs = PatchworkShift.objects.filter(active=True)
+    if start:
+        work_shift_qs = work_shift_qs.filter(starts_at__gte=_aware(start))
+    if end:
+        work_shift_qs = work_shift_qs.filter(starts_at__lt=_aware(end))
+    for shift in work_shift_qs:
+        local_start = _shift_local_datetime(shift)
+        local_end = timezone.localtime(shift.ends_at, local_start.tzinfo) if shift.ends_at else None
+        if shift.all_day:
+            fc_start = local_start.date().isoformat()
+            fc_end = local_end.date().isoformat() if local_end else None
+        else:
+            fc_start = local_start.isoformat()
+            fc_end = local_end.isoformat() if local_end else None
+        events.append({
+            "id": f"patchwork-{shift.id}",
+            "title": "Ike work shift",
+            "start": fc_start,
+            "end": fc_end,
+            "allDay": shift.all_day,
+            "color": "#7c3aed",
+            "extendedProps": {
+                "type": "Ike work shift",
+                "status": "Scheduled",
+                "location": "",
+                "assignee": "Ike",
+                "googleUrl": build_google_calendar_event_url(shift.google_event_id, shift.calendar_id) or "",
+                "readOnly": True,
             },
         })
 

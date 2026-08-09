@@ -34,10 +34,11 @@
 {% else %}
   <div class="stack">
     {% for item in items %}
-      <div class="tile {% if item.is_overdue %}accent-danger{% elif item.kind == 'calendar_event' %}accent-info{% elif item.kind == 'reminder' %}accent-ok{% elif item.kind == 'review' %}accent-brand{% else %}accent-warn{% endif %}">
+      <div class="tile {% if item.is_overdue %}accent-danger{% elif item.kind == 'calendar_event' %}accent-info{% elif item.kind == 'work_shift' %}accent-brand{% elif item.kind == 'reminder' %}accent-ok{% elif item.kind == 'review' %}accent-brand{% else %}accent-warn{% endif %}">
         <div class="tile-row">
           <span class="feed-icon kind-{{ item.kind }}" aria-hidden="true">
             {% if item.kind == 'calendar_event' %}<i class="bi bi-calendar-event"></i>
+            {% elif item.kind == 'work_shift' %}<i class="bi bi-briefcase"></i>
             {% elif item.kind == 'reminder' %}<i class="bi bi-bell"></i>
             {% elif item.kind == 'review' %}<i class="bi bi-inbox"></i>
             {% elif item.kind == 'task_overdue' %}<i class="bi bi-exclamation-triangle"></i>

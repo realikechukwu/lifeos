@@ -11,6 +11,7 @@ from .models import (
     IncomingEmail,
     Note,
     ParsedAction,
+    PatchworkShift,
     Reminder,
     Task,
     TelegramChat,
@@ -325,6 +326,14 @@ class CalendarEventRecordAdmin(admin.ModelAdmin):
     @admin.display(description="Parsed action")
     def parsed_action_link(self, obj):
         return str(obj.parsed_action)
+
+
+@admin.register(PatchworkShift)
+class PatchworkShiftAdmin(admin.ModelAdmin):
+    list_display = ("starts_at", "ends_at", "all_day", "active", "source_status", "updated_at")
+    list_filter = ("active", "all_day", "source_status")
+    search_fields = ("source_uid", "google_event_id", "calendar_id")
+    readonly_fields = [f.name for f in PatchworkShift._meta.fields]
 
 
 @admin.register(Task)

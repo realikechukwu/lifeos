@@ -181,6 +181,11 @@ GOOGLE_CLIENT_SECRETS_FILE = os.environ.get("GOOGLE_CLIENT_SECRETS_FILE", "")
 GOOGLE_CALENDAR_ID = os.environ.get("GOOGLE_CALENDAR_ID", "")
 GOOGLE_ASSISTANT_EMAIL = os.environ.get("GOOGLE_ASSISTANT_EMAIL", "lifeofchukwudi@gmail.com")
 
+# Private iCalendar feed supplied by Patchwork. This is a bearer-style URL:
+# keep it in the deployment EnvironmentFile, never in source code or logs.
+PATCHWORK_CALENDAR_URL = os.environ.get("PATCHWORK_CALENDAR_URL", "")
+PATCHWORK_CALENDAR_TIMEOUT_SECONDS = int(os.environ.get("PATCHWORK_CALENDAR_TIMEOUT_SECONDS", "20"))
+
 AUTHORISED_EMAIL_IKE = os.environ.get("AUTHORISED_EMAIL_IKE", "")
 AUTHORISED_EMAIL_WIFE = os.environ.get("AUTHORISED_EMAIL_WIFE", "")
 

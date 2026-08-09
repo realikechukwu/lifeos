@@ -200,9 +200,19 @@ landing page is **Upcoming**.
   pending reminders, and pending-review actions.
 - **Calendar** (`/calendar/`) — FullCalendar month/week/list views, fed by
   the authenticated JSON endpoint at `/calendar/events.json`. Distinguishes
-  calendar events, task due dates, and reminders by colour; clicking an
+  calendar events, Ike work shifts, task due dates, and reminders by colour; clicking an
   event opens a details modal with a link into Google Calendar where one
   can be safely constructed.
+
+### Patchwork work-shift sync
+
+Set `PATCHWORK_CALENDAR_URL` (the private `.ics` subscription URL) in the
+same deployment environment file as `GOOGLE_CALENDAR_ID`. The
+`sync_patchwork_calendar` command mirrors the source feed into that shared
+Google calendar every 15 minutes when the included
+`lifeassistant-patchwork-calendar.timer` is installed. Each mirrored entry
+is labelled **Ike work shift**; updates and cancellations must be made in
+Patchwork, not LifeOS.
 - **Tasks** (`/tasks/`) — filter by status/assignee/overdue, search, create,
   edit, mark complete, cancel. Uses plain Django `ModelForm`s; task
   completion/cancellation call the same `assistant/services/tasks.py`

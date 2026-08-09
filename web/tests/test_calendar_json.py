@@ -8,7 +8,9 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from core.models import AssignedTo, CalendarEventRecord, IncomingEmail, ParsedAction, RecipientTarget, Reminder, Task
+from core.models import (
+    AssignedTo, CalendarEventRecord, IncomingEmail, ParsedAction, PatchworkShift, RecipientTarget, Reminder, Task,
+)
 
 User = get_user_model()
 
@@ -34,13 +36,22 @@ class CalendarJsonTests(TestCase):
             title="Water plants", recipient=RecipientTarget.WIFE,
             reminder_date=today + timedelta(days=1), reminder_time=timezone.now().time(),
         )
+        PatchworkShift.objects.create(
+            source_uid="patchwork-shift-1",
+            google_event_id="patchwork-google-1",
+            calendar_id="cal-1",
+            starts_at=timezone.now() + timedelta(days=3),
+            ends_at=timezone.now() + timedelta(days=3, hours=12),
+        )
 
     def test_calendar_json_includes_all_three_types(self):
         response = self.client.get(reverse("web:calendar_events_json"))
         self.assertEqual(response.status_code, 200)
         events = response.json()
         types = {event["extendedProps"]["type"] for event in events}
-        self.assertEqual(types, {"Calendar event", "Task due date", "Reminder"})
+        self.assertEqual(types, {"Calendar event", "Ike work shift", "Task due date", "Reminder"})
+        work_shift = next(event for event in events if event["extendedProps"]["type"] == "Ike work shift")
+        self.assertEqual(work_shift["title"], "Ike work shift")
 
     def test_calendar_json_respects_start_end_range(self):
         far_future = (timezone.localdate() + timedelta(days=400)).isoformat()

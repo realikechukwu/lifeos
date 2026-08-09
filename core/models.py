@@ -252,6 +252,38 @@ class CalendarEventRecord(models.Model):
         return f"{self.title} on {self.appointment_date}"
 
 
+class PatchworkShift(models.Model):
+    """A work shift imported from the private Patchwork iCalendar feed.
+
+    Patchwork remains authoritative: LifeOS only mirrors the time and the
+    Google Calendar event it owns.  In particular, the source event summary
+    and description are intentionally not retained or shown to the household.
+    """
+
+    source_uid = models.CharField(max_length=512, unique=True)
+    google_event_id = models.CharField(max_length=255, blank=True, default="")
+    calendar_id = models.CharField(max_length=255, blank=True, default="")
+
+    starts_at = models.DateTimeField()
+    ends_at = models.DateTimeField(null=True, blank=True)
+    timezone = models.CharField(max_length=64, default="Europe/London")
+    all_day = models.BooleanField(default=False)
+    source_status = models.CharField(max_length=50, blank=True, default="")
+    payload_hash = models.CharField(max_length=64, blank=True, default="")
+    active = models.BooleanField(default=True)
+    last_seen_at = models.DateTimeField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["starts_at", "created_at"]
+        indexes = [models.Index(fields=["active", "starts_at"])]
+
+    def __str__(self):
+        return f"Ike work shift — {self.starts_at.isoformat()}"
+
+
 class Task(models.Model):
     class Status(models.TextChoices):
         OPEN = "open", "Open"
