@@ -330,9 +330,11 @@ class CalendarEventRecordAdmin(admin.ModelAdmin):
 
 @admin.register(PatchworkShift)
 class PatchworkShiftAdmin(admin.ModelAdmin):
-    list_display = ("starts_at", "ends_at", "all_day", "active", "source_status", "updated_at")
-    list_filter = ("active", "all_day", "source_status")
-    search_fields = ("source_uid", "google_event_id", "calendar_id")
+    list_display = (
+        "source_label", "starts_at", "ends_at", "all_day", "active", "suppressed", "source_status", "updated_at",
+    )
+    list_filter = ("active", "suppressed", "all_day", "source_status")
+    search_fields = ("source_label", "source_uid", "google_event_id", "calendar_id")
     readonly_fields = [f.name for f in PatchworkShift._meta.fields]
 
 

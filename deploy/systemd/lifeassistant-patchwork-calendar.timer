@@ -2,8 +2,8 @@
 Description=Sync Patchwork work shifts twice daily
 
 [Timer]
-OnCalendar=*-*-* 07:00:00
-OnCalendar=*-*-* 19:00:00
+OnCalendar=*-*-* 07:00:00 Europe/London
+OnCalendar=*-*-* 19:00:00 Europe/London
 AccuracySec=1min
 Persistent=true
 

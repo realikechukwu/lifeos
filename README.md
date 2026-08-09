@@ -209,10 +209,13 @@ landing page is **Upcoming**.
 Set `PATCHWORK_CALENDAR_URL` (the private `.ics` subscription URL) in the
 same deployment environment file as `GOOGLE_CALENDAR_ID`. The
 `sync_patchwork_calendar` command mirrors the source feed into that shared
-Google calendar twice daily (07:00 and 19:00 server-local time) when the included
-`lifeassistant-patchwork-calendar.timer` is installed. Each mirrored entry
-is labelled **Ike work shift**; updates and cancellations must be made in
-Patchwork, not LifeOS.
+Google calendar twice daily (07:00 and 19:00 Europe/London) when the included
+`lifeassistant-patchwork-calendar.timer` is installed. Mirrored entries keep
+their Patchwork label, prefixed with **Ike —** (for example, **Ike — Standard
+Day — General Medicine** or **Ike — Annual leave**). Redundant work segments
+fully contained by a longer work event on the same day are suppressed, while
+adjacent shifts and leave/time-off entries remain visible. Updates and
+cancellations must be made in Patchwork, not LifeOS.
 - **Tasks** (`/tasks/`) — filter by status/assignee/overdue, search, create,
   edit, mark complete, cancel. Uses plain Django `ModelForm`s; task
   completion/cancellation call the same `assistant/services/tasks.py`

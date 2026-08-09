@@ -38,6 +38,7 @@ class CalendarJsonTests(TestCase):
         )
         PatchworkShift.objects.create(
             source_uid="patchwork-shift-1",
+            source_label="Long Day — General Medicine",
             google_event_id="patchwork-google-1",
             calendar_id="cal-1",
             starts_at=timezone.now() + timedelta(days=3),
@@ -51,7 +52,7 @@ class CalendarJsonTests(TestCase):
         types = {event["extendedProps"]["type"] for event in events}
         self.assertEqual(types, {"Calendar event", "Ike work shift", "Task due date", "Reminder"})
         work_shift = next(event for event in events if event["extendedProps"]["type"] == "Ike work shift")
-        self.assertEqual(work_shift["title"], "Ike work shift")
+        self.assertEqual(work_shift["title"], "Ike — Long Day — General Medicine")
 
     def test_calendar_json_respects_start_end_range(self):
         far_future = (timezone.localdate() + timedelta(days=400)).isoformat()

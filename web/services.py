@@ -105,7 +105,7 @@ def build_upcoming_feed(user, *, window_days: int = UPCOMING_WINDOW_DAYS) -> lis
         items.append(FeedItem(
             kind="work_shift",
             kind_label="Ike work shift",
-            title="Ike work shift",
+            title=shift.display_title,
             when=shift.starts_at,
             when_label=_format_when(
                 local_start.date(), local_start.timetz().replace(tzinfo=None), shift.all_day
@@ -250,7 +250,7 @@ def build_calendar_feed(start: date | None, end: date | None) -> list[dict]:
             fc_end = local_end.isoformat() if local_end else None
         events.append({
             "id": f"patchwork-{shift.id}",
-            "title": "Ike work shift",
+            "title": shift.display_title,
             "start": fc_start,
             "end": fc_end,
             "allDay": shift.all_day,

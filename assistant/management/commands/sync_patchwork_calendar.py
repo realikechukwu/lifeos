@@ -30,11 +30,13 @@ class Command(BaseCommand):
                 "updated": result.updated,
                 "deactivated": result.deactivated,
                 "unchanged": result.unchanged,
+                "suppressed": result.suppressed,
             },
         )
         self.stdout.write(
             self.style.SUCCESS(
                 f"Patchwork sync: {result.created} created, {result.updated} updated, "
-                f"{result.deactivated} deactivated, {result.unchanged} unchanged."
+                f"{result.deactivated} deactivated, {result.unchanged} unchanged, "
+                f"{result.suppressed} redundant intervals suppressed."
             )
         )

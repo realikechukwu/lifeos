@@ -1,13 +1,14 @@
 """One-way Patchwork iCalendar synchronisation for Ike's work shifts.
 
-The Patchwork subscription URL is a private bearer credential.  This module
-never logs it and deliberately imports only timing/status information: the
-shared calendar always displays the neutral title ``Ike work shift``.
+The Patchwork subscription URL is a private bearer credential and is never
+logged. Event summaries are retained as shift labels, while descriptions and
+other source details remain excluded from the household calendar.
 """
 
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone as datetime_timezone
 from urllib.request import Request, urlopen
@@ -22,13 +23,15 @@ from core.models import PatchworkShift
 from .gmail import get_google_credentials
 
 
-WORK_SHIFT_TITLE = "Ike work shift"
+WORK_SHIFT_FALLBACK_TITLE = "Ike work shift"
 WORK_SHIFT_DESCRIPTION = "Synced automatically from Patchwork. Edit this shift in Patchwork."
+TIME_OFF_LABEL_MARKERS = ("leave", "time off")
 
 
 @dataclass(frozen=True)
 class PatchworkShiftData:
     uid: str
+    label: str
     starts_at: datetime
     ends_at: datetime | None
     timezone_name: str
@@ -43,6 +46,7 @@ class SyncResult:
     updated: int = 0
     deactivated: int = 0
     unchanged: int = 0
+    suppressed: int = 0
 
 
 def fetch_patchwork_calendar() -> bytes:
@@ -91,6 +95,21 @@ def _parse_property(line: str) -> tuple[str, dict[str, str], str] | None:
     return name, params, value
 
 
+def _normalise_ical_text(value: str) -> str:
+    """Decode the RFC 5545 escapes used by Patchwork's SUMMARY values."""
+    decoded: list[str] = []
+    index = 0
+    while index < len(value):
+        if value[index] == "\\" and index + 1 < len(value):
+            escaped = value[index + 1]
+            decoded.append(" " if escaped in ("n", "N") else escaped)
+            index += 2
+            continue
+        decoded.append(value[index])
+        index += 1
+    return re.sub(r"\s+", " ", "".join(decoded)).strip()[:255]
+
+
 def _zone(name: str) -> ZoneInfo:
     try:
         return ZoneInfo(name)
@@ -113,8 +132,10 @@ def _parse_ical_datetime(value: str, params: dict[str, str]) -> tuple[datetime, 
     return parsed.replace(tzinfo=_zone(timezone_name)), False, timezone_name
 
 
-def _hash_shift(*, starts_at: datetime, ends_at: datetime | None, timezone_name: str, all_day: bool, status: str) -> str:
-    values = (starts_at.isoformat(), ends_at.isoformat() if ends_at else "", timezone_name, str(all_day), status)
+def _hash_shift(
+    *, label: str, starts_at: datetime, ends_at: datetime | None, timezone_name: str, all_day: bool, status: str
+) -> str:
+    values = (label, starts_at.isoformat(), ends_at.isoformat() if ends_at else "", timezone_name, str(all_day), status)
     return hashlib.sha256("|".join(values).encode("utf-8")).hexdigest()
 
 
@@ -161,14 +182,17 @@ def parse_patchwork_calendar(raw_calendar: bytes) -> list[PatchworkShiftData]:
             raise ValueError("Patchwork calendar contains an invalid shift time.") from exc
 
         status = event.get("STATUS", ({}, "CONFIRMED"))[1].strip().upper() or "CONFIRMED"
+        label = _normalise_ical_text(event.get("SUMMARY", ({}, ""))[1])
         shifts.append(PatchworkShiftData(
             uid=uid,
+            label=label,
             starts_at=starts_at,
             ends_at=ends_at,
             timezone_name=timezone_name,
             all_day=all_day,
             status=status,
             payload_hash=_hash_shift(
+                label=label,
                 starts_at=starts_at,
                 ends_at=ends_at,
                 timezone_name=timezone_name,
@@ -182,9 +206,53 @@ def parse_patchwork_calendar(raw_calendar: bytes) -> list[PatchworkShiftData]:
     return shifts
 
 
+def _shift_title(label: str) -> str:
+    return f"Ike — {label}" if label else WORK_SHIFT_FALLBACK_TITLE
+
+
+def _is_time_off(shift: PatchworkShiftData) -> bool:
+    label = shift.label.casefold()
+    return any(marker in label for marker in TIME_OFF_LABEL_MARKERS)
+
+
+def _local_start_date(shift: PatchworkShiftData) -> date:
+    return shift.starts_at.astimezone(_zone(shift.timezone_name)).date()
+
+
+def _suppressed_work_shift_uids(shifts: list[PatchworkShiftData]) -> set[str]:
+    """Find redundant work intervals without hiding leave or adjacent shifts.
+
+    Patchwork commonly emits 09:00–13:00 and 13:00–17:00 component events
+    alongside a covering 09:00–17:00 event. A component is suppressed only
+    when another work event on the same local start date fully contains it.
+    Exact duplicate intervals keep the first feed entry. Time-off/leave items
+    are excluded so a leave annotation is never hidden by a scheduled shift.
+    """
+    suppressed: set[str] = set()
+    candidates = [
+        (index, shift)
+        for index, shift in enumerate(shifts)
+        if shift.status != "CANCELLED" and shift.ends_at is not None and not _is_time_off(shift)
+    ]
+
+    for index, shift in candidates:
+        for other_index, other in candidates:
+            if shift.uid == other.uid or _local_start_date(shift) != _local_start_date(other):
+                continue
+            contains = other.starts_at <= shift.starts_at and other.ends_at >= shift.ends_at
+            strictly_larger = other.starts_at < shift.starts_at or other.ends_at > shift.ends_at
+            earlier_exact_duplicate = (
+                other.starts_at == shift.starts_at and other.ends_at == shift.ends_at and other_index < index
+            )
+            if contains and (strictly_larger or earlier_exact_duplicate):
+                suppressed.add(shift.uid)
+                break
+    return suppressed
+
+
 def _google_event_body(shift: PatchworkShiftData) -> dict:
     body = {
-        "summary": WORK_SHIFT_TITLE,
+        "summary": _shift_title(shift.label),
         "description": WORK_SHIFT_DESCRIPTION,
         "extendedProperties": {"private": {"lifeos_source": "patchwork", "patchwork_uid": shift.uid}},
     }
@@ -222,6 +290,21 @@ def _delete_google_event(service, record: PatchworkShift) -> None:
             raise
 
 
+def _update_record_from_shift(
+    record: PatchworkShift, shift: PatchworkShiftData, *, now: datetime, active: bool, suppressed: bool
+) -> None:
+    record.starts_at = shift.starts_at
+    record.ends_at = shift.ends_at
+    record.timezone = shift.timezone_name
+    record.all_day = shift.all_day
+    record.source_label = shift.label
+    record.source_status = shift.status
+    record.payload_hash = shift.payload_hash
+    record.active = active
+    record.suppressed = suppressed
+    record.last_seen_at = now
+
+
 def sync_patchwork_calendar(*, fetcher=fetch_patchwork_calendar, calendar_service=None, now=None) -> SyncResult:
     """Mirror the current Patchwork feed into the configured shared calendar.
 
@@ -239,20 +322,44 @@ def sync_patchwork_calendar(*, fetcher=fetch_patchwork_calendar, calendar_servic
     now = now or timezone.now()
     existing = {record.source_uid: record for record in PatchworkShift.objects.all()}
     seen_uids = {shift.uid for shift in shifts}
-    created = updated = deactivated = unchanged = 0
+    suppressed_uids = _suppressed_work_shift_uids(shifts)
+    created = updated = deactivated = unchanged = suppressed_count = 0
 
     for shift in shifts:
         record = existing.get(shift.uid)
         cancelled = shift.status == "CANCELLED"
         if cancelled:
-            if record and record.active:
-                _delete_google_event(service, record)
-                record.active = False
-                record.source_status = shift.status
-                record.last_seen_at = now
-                record.payload_hash = shift.payload_hash
-                record.save(update_fields=["active", "source_status", "last_seen_at", "payload_hash", "updated_at"])
-                deactivated += 1
+            if record:
+                if record.active:
+                    _delete_google_event(service, record)
+                    deactivated += 1
+                _update_record_from_shift(record, shift, now=now, active=False, suppressed=False)
+                record.save()
+            continue
+
+        if shift.uid in suppressed_uids:
+            suppressed_count += 1
+            if record is None:
+                PatchworkShift.objects.create(
+                    source_uid=shift.uid,
+                    calendar_id=calendar_id,
+                    starts_at=shift.starts_at,
+                    ends_at=shift.ends_at,
+                    timezone=shift.timezone_name,
+                    all_day=shift.all_day,
+                    source_label=shift.label,
+                    source_status=shift.status,
+                    payload_hash=shift.payload_hash,
+                    active=False,
+                    suppressed=True,
+                    last_seen_at=now,
+                )
+            else:
+                if record.active:
+                    _delete_google_event(service, record)
+                    deactivated += 1
+                _update_record_from_shift(record, shift, now=now, active=False, suppressed=True)
+                record.save()
             continue
 
         if record is None:
@@ -265,8 +372,10 @@ def sync_patchwork_calendar(*, fetcher=fetch_patchwork_calendar, calendar_servic
                 ends_at=shift.ends_at,
                 timezone=shift.timezone_name,
                 all_day=shift.all_day,
+                source_label=shift.label,
                 source_status=shift.status,
                 payload_hash=shift.payload_hash,
+                suppressed=False,
                 last_seen_at=now,
             )
             created += 1
@@ -274,6 +383,7 @@ def sync_patchwork_calendar(*, fetcher=fetch_patchwork_calendar, calendar_servic
 
         needs_update = (
             not record.active
+            or record.suppressed
             or record.payload_hash != shift.payload_hash
             or record.calendar_id != calendar_id
             or not record.google_event_id
@@ -294,14 +404,7 @@ def sync_patchwork_calendar(*, fetcher=fetch_patchwork_calendar, calendar_servic
 
             record.google_event_id = google_event_id
             record.calendar_id = calendar_id
-            record.starts_at = shift.starts_at
-            record.ends_at = shift.ends_at
-            record.timezone = shift.timezone_name
-            record.all_day = shift.all_day
-            record.source_status = shift.status
-            record.payload_hash = shift.payload_hash
-            record.active = True
-            record.last_seen_at = now
+            _update_record_from_shift(record, shift, now=now, active=True, suppressed=False)
             record.save()
             updated += 1
         else:
@@ -310,11 +413,19 @@ def sync_patchwork_calendar(*, fetcher=fetch_patchwork_calendar, calendar_servic
             unchanged += 1
 
     for record in existing.values():
-        if record.active and record.source_uid not in seen_uids:
-            _delete_google_event(service, record)
+        if record.source_uid not in seen_uids and (record.active or record.suppressed):
+            if record.active:
+                _delete_google_event(service, record)
+                deactivated += 1
             record.active = False
+            record.suppressed = False
             record.last_seen_at = now
-            record.save(update_fields=["active", "last_seen_at", "updated_at"])
-            deactivated += 1
+            record.save(update_fields=["active", "suppressed", "last_seen_at", "updated_at"])
 
-    return SyncResult(created=created, updated=updated, deactivated=deactivated, unchanged=unchanged)
+    return SyncResult(
+        created=created,
+        updated=updated,
+        deactivated=deactivated,
+        unchanged=unchanged,
+        suppressed=suppressed_count,
+    )

@@ -255,9 +255,10 @@ class CalendarEventRecord(models.Model):
 class PatchworkShift(models.Model):
     """A work shift imported from the private Patchwork iCalendar feed.
 
-    Patchwork remains authoritative: LifeOS only mirrors the time and the
-    Google Calendar event it owns.  In particular, the source event summary
-    and description are intentionally not retained or shown to the household.
+    Patchwork remains authoritative: LifeOS mirrors the source label and time
+    into the Google Calendar event it owns. Redundant work intervals remain
+    recorded but are suppressed from the mirror so the decision is reversible
+    on the next sync.
     """
 
     source_uid = models.CharField(max_length=512, unique=True)
@@ -268,9 +269,11 @@ class PatchworkShift(models.Model):
     ends_at = models.DateTimeField(null=True, blank=True)
     timezone = models.CharField(max_length=64, default="Europe/London")
     all_day = models.BooleanField(default=False)
+    source_label = models.CharField(max_length=255, blank=True, default="")
     source_status = models.CharField(max_length=50, blank=True, default="")
     payload_hash = models.CharField(max_length=64, blank=True, default="")
     active = models.BooleanField(default=True)
+    suppressed = models.BooleanField(default=False)
     last_seen_at = models.DateTimeField(null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
@@ -281,7 +284,11 @@ class PatchworkShift(models.Model):
         indexes = [models.Index(fields=["active", "starts_at"])]
 
     def __str__(self):
-        return f"Ike work shift — {self.starts_at.isoformat()}"
+        return f"{self.display_title} — {self.starts_at.isoformat()}"
+
+    @property
+    def display_title(self) -> str:
+        return f"Ike — {self.source_label}" if self.source_label else "Ike work shift"
 
 
 class Task(models.Model):
