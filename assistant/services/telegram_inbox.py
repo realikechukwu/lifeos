@@ -5,15 +5,110 @@ They never create ``IncomingEmail`` or ``ParsedAction`` records, keeping the
 Telegram inbox separate from the email extraction/authorisation pipeline.
 """
 
-from datetime import time, timedelta
+from dataclasses import dataclass
+from datetime import date, datetime, time, timedelta
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from django.db.models import Q
 from django.utils import timezone
 
-from core.models import AuditLog, CalendarEventRecord, Note, Reminder, Task
+from core.models import AuditLog, CalendarEventRecord, Note, PatchworkShift, Reminder, Task
 
 
 PAGE_SIZE = 6
+
+
+@dataclass(frozen=True)
+class TelegramCalendarItem:
+    """A common read-only shape for LifeOS events and Patchwork shifts."""
+
+    kind: str
+    object_id: int
+    title: str
+    appointment_date: date
+    start_time: time | None
+    end_date: date | None
+    end_time: time | None
+    all_day: bool
+
+
+def _aware(d: date) -> datetime:
+    return timezone.make_aware(datetime.combine(d, time.min), timezone.get_current_timezone())
+
+
+def _shift_zone(shift: PatchworkShift):
+    try:
+        return ZoneInfo(shift.timezone)
+    except ZoneInfoNotFoundError:
+        return timezone.get_current_timezone()
+
+
+def calendar_item_for_shift(shift: PatchworkShift) -> TelegramCalendarItem:
+    source_zone = _shift_zone(shift)
+    local_start = timezone.localtime(shift.starts_at, source_zone)
+    local_end = timezone.localtime(shift.ends_at, source_zone) if shift.ends_at else None
+    return TelegramCalendarItem(
+        kind="work_shift",
+        object_id=shift.id,
+        title=shift.display_title,
+        appointment_date=local_start.date(),
+        start_time=None if shift.all_day else local_start.timetz().replace(tzinfo=None),
+        end_date=local_end.date() if local_end else None,
+        end_time=(
+            None
+            if shift.all_day or local_end is None
+            else local_end.timetz().replace(tzinfo=None)
+        ),
+        all_day=shift.all_day,
+    )
+
+
+def _calendar_item_for_event(event: CalendarEventRecord) -> TelegramCalendarItem:
+    return TelegramCalendarItem(
+        kind="calendar_event",
+        object_id=event.id,
+        title=event.title,
+        appointment_date=event.appointment_date,
+        start_time=event.start_time,
+        end_date=event.appointment_date if event.end_time else None,
+        end_time=event.end_time,
+        all_day=event.all_day or event.start_time is None,
+    )
+
+
+def calendar_items(days: int = 30) -> list[TelegramCalendarItem]:
+    """Merge ordinary events and active Patchwork shifts chronologically."""
+    today = timezone.localdate()
+    horizon = today + timedelta(days=days)
+    items = [
+        _calendar_item_for_event(event)
+        for event in CalendarEventRecord.objects.filter(
+            appointment_date__gte=today, appointment_date__lte=horizon
+        )
+    ]
+
+    # Pad the UTC query by a day at each edge before applying each shift's
+    # source timezone. This keeps boundary dates correct for non-UK feeds.
+    shifts = PatchworkShift.objects.filter(
+        active=True,
+        suppressed=False,
+        starts_at__gte=_aware(today - timedelta(days=1)),
+        starts_at__lt=_aware(horizon + timedelta(days=2)),
+    )
+    for shift in shifts:
+        item = calendar_item_for_shift(shift)
+        if today <= item.appointment_date <= horizon:
+            items.append(item)
+
+    return sorted(
+        items,
+        key=lambda item: (
+            item.appointment_date,
+            item.start_time or time.min,
+            item.kind,
+            item.object_id,
+        ),
+    )
 
 
 def _slice(queryset, page: int):
@@ -38,13 +133,7 @@ def open_tasks(page: int = 0):
 
 
 def upcoming_events(page: int = 0, days: int = 30):
-    today = timezone.localdate()
-    return _slice(
-        CalendarEventRecord.objects.filter(
-            appointment_date__gte=today, appointment_date__lte=today + timedelta(days=days)
-        ).order_by("appointment_date", "start_time", "created_at"),
-        page,
-    )
+    return _slice(calendar_items(days), page)
 
 
 def recent_notes(page: int = 0, query: str = ""):
@@ -84,7 +173,7 @@ def search_lifeos(query: str):
 def today_items():
     """Return the exact sources shown in a private daily briefing."""
     today = timezone.localdate()
-    events = list(CalendarEventRecord.objects.filter(appointment_date=today).order_by("start_time", "created_at"))
+    events = calendar_items(days=0)
     tasks = list(
         Task.objects.exclude(status__in=[Task.Status.COMPLETED, Task.Status.CANCELLED]).filter(
             Q(due_date__lt=today) | Q(due_date=today)
