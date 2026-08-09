@@ -1,10 +1,10 @@
 [Unit]
-Description=Sync Patchwork work shifts every 15 minutes
+Description=Sync Patchwork work shifts twice daily
 
 [Timer]
-OnBootSec=2min
-OnUnitActiveSec=15min
-AccuracySec=30s
+OnCalendar=*-*-* 07:00:00
+OnCalendar=*-*-* 19:00:00
+AccuracySec=1min
 Persistent=true
 
 [Install]

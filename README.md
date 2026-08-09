@@ -209,7 +209,7 @@ landing page is **Upcoming**.
 Set `PATCHWORK_CALENDAR_URL` (the private `.ics` subscription URL) in the
 same deployment environment file as `GOOGLE_CALENDAR_ID`. The
 `sync_patchwork_calendar` command mirrors the source feed into that shared
-Google calendar every 15 minutes when the included
+Google calendar twice daily (07:00 and 19:00 server-local time) when the included
 `lifeassistant-patchwork-calendar.timer` is installed. Each mirrored entry
 is labelled **Ike work shift**; updates and cancellations must be made in
 Patchwork, not LifeOS.

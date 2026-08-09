@@ -50,7 +50,10 @@ def fetch_patchwork_calendar() -> bytes:
     url = settings.PATCHWORK_CALENDAR_URL.strip()
     if not url:
         raise RuntimeError("PATCHWORK_CALENDAR_URL is not configured.")
-    request = Request(url, headers={"Accept": "text/calendar"})
+    # Patchwork's edge blocks Python's default urllib user agent (HTTP 403),
+    # while accepting normal calendar-feed clients. Keep this explicit so a
+    # dependency upgrade cannot silently restore the rejected default.
+    request = Request(url, headers={"Accept": "text/calendar", "User-Agent": "curl/8.7.1"})
     with urlopen(request, timeout=settings.PATCHWORK_CALENDAR_TIMEOUT_SECONDS) as response:  # noqa: S310 - configured HTTPS feed
         payload = response.read()
     if not payload:

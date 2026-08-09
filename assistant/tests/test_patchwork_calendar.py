@@ -1,10 +1,10 @@
 from datetime import datetime
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from django.test import TestCase, override_settings
 from django.utils import timezone
 
-from assistant.services.patchwork_calendar import parse_patchwork_calendar, sync_patchwork_calendar
+from assistant.services.patchwork_calendar import fetch_patchwork_calendar, parse_patchwork_calendar, sync_patchwork_calendar
 from core.models import PatchworkShift
 
 
@@ -39,6 +39,19 @@ class PatchworkCalendarSyncTests(TestCase):
         self.assertEqual(shifts[0].uid, "shift-1")
         self.assertEqual(shifts[0].starts_at.hour, 7)
         self.assertEqual(shifts[0].timezone_name, "Europe/London")
+
+    @override_settings(PATCHWORK_CALENDAR_URL="https://example.test/private-feed")
+    @patch("assistant.services.patchwork_calendar.urlopen")
+    def test_fetch_uses_patchwork_compatible_calendar_client_header(self, mock_urlopen):
+        response = MagicMock()
+        response.read.return_value = b"BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n"
+        mock_urlopen.return_value.__enter__.return_value = response
+
+        fetch_patchwork_calendar()
+
+        request = mock_urlopen.call_args.args[0]
+        self.assertEqual(request.get_header("User-agent"), "curl/8.7.1")
+        self.assertEqual(request.get_header("Accept"), "text/calendar")
 
     def test_new_shift_creates_neutral_google_event_and_local_mapping(self):
         result = sync_patchwork_calendar(
