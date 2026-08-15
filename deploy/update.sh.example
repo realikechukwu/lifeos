@@ -21,8 +21,8 @@ set -euo pipefail
 echo "Edit deploy/update.sh.example, fill in the paths below, and remove this line." >&2
 exit 1
 
-PROJECT_PATH="<PROJECT_PATH>"          # e.g. /home/lifeassistant/lifeos
-VENV_PATH="<VENV_PATH>"                # e.g. /home/lifeassistant/lifeos/.venv
+PROJECT_PATH="<PROJECT_PATH>"          # e.g. /opt/lifeassistant
+VENV_PATH="<VENV_PATH>"                # e.g. /opt/lifeassistant/.venv
 GIT_BRANCH="main"                      # branch to deploy
 WEB_SERVICE="lifeassistant-web"
 

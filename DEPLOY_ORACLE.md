@@ -29,7 +29,7 @@ has two paths — pick the one that matches your server:
 Placeholders used throughout:
 
 - `<LINUX_USERNAME>` — a dedicated non-root user, e.g. `lifeassistant`
-- `<PROJECT_PATH>` — where you clone the repo, e.g. `/home/<LINUX_USERNAME>/lifeos`
+- `<PROJECT_PATH>` — where you clone the repo, e.g. `/opt/lifeassistant`
 - `<VENV_PATH>` — usually `<PROJECT_PATH>/.venv`
 - `<ENV_FILE_PATH>` — usually `<PROJECT_PATH>/.env`
 - `<GIT_REMOTE_URL>` — your repository's clone URL
@@ -52,17 +52,37 @@ su - <LINUX_USERNAME>
 ```
 
 Everything from here on runs as `<LINUX_USERNAME>`, not root. The systemd
-units in `deploy/systemd/` also run the app as this user (never root).
+units in `deploy/systemd/` also run the app as this user (never root). The one
+exception is the directory creation in step 2, which needs sudo.
 
-## 2. Clone the repository
+## 2. Create the project directory and clone
+
+The code lives under `/opt`, alongside any other services on the box — not in
+the app user's home. `/opt` is root-owned, so create the directory from a
+sudo-capable account (e.g. `ubuntu`), hand it to `<LINUX_USERNAME>`, then clone
+as that user:
 
 ```bash
-cd ~
-git clone <GIT_REMOTE_URL> lifeos
-cd lifeos
+sudo mkdir -p /opt/lifeassistant
+sudo chown <LINUX_USERNAME>:<LINUX_USERNAME> /opt/lifeassistant
+sudo chmod 750 /opt/lifeassistant
+sudo -u <LINUX_USERNAME> git clone <GIT_REMOTE_URL> /opt/lifeassistant
+cd /opt/lifeassistant
 ```
 
-`<PROJECT_PATH>` is now `/home/<LINUX_USERNAME>/lifeos`.
+`<PROJECT_PATH>` is now `/opt/lifeassistant`.
+
+`<LINUX_USERNAME>`'s home directory stays as the SSH login home — it holds
+`.ssh/authorized_keys` for the deploy key, any secrets deliberately kept
+outside the repo (see step 19), and Gunicorn's `$HOME`-derived control socket
+at `~/.gunicorn/gunicorn.ctl`. Only the code moves to `/opt`.
+
+Mode `750` is safe here because nothing outside the app needs to read the tree:
+Gunicorn, the timers and WhiteNoise's static serving all run as
+`<LINUX_USERNAME>`, and a reverse proxy reaches the app over a socket or port
+rather than the filesystem. Note that this does mean other accounts on the box
+(including your own sudo-capable login) need `sudo` to read anything under
+`<PROJECT_PATH>`.
 
 ## 3. Create a Python virtual environment
 
@@ -438,8 +458,9 @@ See `MANUAL_TEST_PHASE_3.md` for the full manual test checklist.
 ## 21. Updating the application safely later
 
 Use `deploy/update.sh.example` as a starting point (copy it, fill in the
-placeholders, keep it out of version control if it ends up containing
-anything server-specific). It pulls, installs requirements, migrates,
+placeholders). The resulting `update.sh` is per-server and is gitignored, so
+it never enters version control and a pull can never overwrite the real paths
+you filled in. It pulls, installs requirements, migrates,
 collects static files, restarts Gunicorn, and checks `/health/` — and stops
 on the first error. It never touches `.env` and never runs a destructive
 database command.

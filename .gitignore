@@ -14,3 +14,11 @@ client_secret*.json
 credentials*.json
 token.json
 .env
+
+# The live deploy script is per-server: copy deploy/update.sh.example to
+# update.sh on the box and fill in its real paths (see DEPLOY_ORACLE.md
+# step 21). Never committed, so a pull can't overwrite a server's paths —
+# and so it can't be accidentally staged, which is easy to do and leaves
+# the repo sitting in a permanently half-committed state.
+/update.sh
+/update.sh.bak-*
