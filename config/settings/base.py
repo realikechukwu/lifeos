@@ -77,6 +77,7 @@ TEMPLATES = [
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
                 "web.context_processors.pending_review_count",
+                "web.context_processors.site_metadata",
             ],
         },
     },

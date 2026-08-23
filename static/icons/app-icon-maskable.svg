@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title description">
+  <title id="title">Family Assistant</title>
+  <desc id="description">A white home and heart on a full-bleed purple background.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8a7df9"/>
+      <stop offset="0.52" stop-color="#6d5ef8"/>
+      <stop offset="1" stop-color="#4634c2"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientTransform="translate(210 160) rotate(45) scale(720)">
+      <stop stop-color="#ffffff" stop-opacity=".24"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#background)"/>
+  <rect width="1024" height="1024" fill="url(#glow)"/>
+  <path fill="#fff" d="M512 246c-14 0-27 5-38 15L220 487c-20 18-22 49-4 69 18 20 49 22 69 4l25-22v200c0 42 34 76 76 76h252c42 0 76-34 76-76V538l25 22c20 18 51 16 69-4 18-20 16-51-4-69L550 261a57 57 0 0 0-38-15Z"/>
+  <path fill="#6d5ef8" d="M512 695c-15-15-99-66-99-136 0-45 32-77 73-77 24 0 45 12 59 31 14-19 35-31 59-31 41 0 73 32 73 77 0 70-84 121-99 136l-33 30-33-30Z"/>
+  <circle cx="815" cy="219" r="24" fill="#fff" fill-opacity=".44"/>
+</svg>

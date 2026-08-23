@@ -5,6 +5,9 @@ from . import views
 app_name = "web"
 
 urlpatterns = [
+    path("manifest.webmanifest", views.web_manifest, name="web_manifest"),
+    path("service-worker.js", views.service_worker, name="service_worker"),
+
     path("", views.upcoming, name="upcoming"),
 
     path("calendar/", views.calendar_page, name="calendar"),

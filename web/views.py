@@ -13,10 +13,13 @@ from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.db import DatabaseError, connection
 from django.db.models import Q
-from django.http import JsonResponse
+from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.template.loader import render_to_string
+from django.templatetags.static import static
+from django.urls import reverse
 from django.utils import timezone
-from django.views.decorators.http import require_POST
+from django.views.decorators.http import require_GET, require_POST
 
 from assistant.services.router import admin_approve_and_execute
 from assistant.services.tasks import cancel_task, complete_task
@@ -40,6 +43,111 @@ def staff_required(view_func):
         return view_func(request, *args, **kwargs)
 
     return _wrapped
+
+
+# ---------------------------------------------------------------------------
+# Progressive Web App metadata (public assets; never contains family data)
+# ---------------------------------------------------------------------------
+
+@require_GET
+def web_manifest(request):
+    """Serve an install manifest with storage-aware static asset URLs."""
+    manifest = {
+        "id": reverse("web:upcoming"),
+        "name": "Family Assistant",
+        "short_name": "Family",
+        "description": "A private home for your family's plans, tasks, notes, and reminders.",
+        "start_url": reverse("web:upcoming"),
+        "scope": "/",
+        "lang": "en-GB",
+        "dir": "ltr",
+        "display": "standalone",
+        "display_override": ["standalone", "minimal-ui"],
+        "orientation": "any",
+        "background_color": "#f5f4fb",
+        "theme_color": "#5847e6",
+        "categories": ["productivity", "lifestyle"],
+        "icons": [
+            {
+                "src": static("icons/app-icon.svg"),
+                "sizes": "any",
+                "type": "image/svg+xml",
+                "purpose": "any",
+            },
+            {
+                "src": static("icons/app-icon-192.png"),
+                "sizes": "192x192",
+                "type": "image/png",
+                "purpose": "any",
+            },
+            {
+                "src": static("icons/app-icon-512.png"),
+                "sizes": "512x512",
+                "type": "image/png",
+                "purpose": "any",
+            },
+            {
+                "src": static("icons/app-icon-maskable-192.png"),
+                "sizes": "192x192",
+                "type": "image/png",
+                "purpose": "maskable",
+            },
+            {
+                "src": static("icons/app-icon-maskable-512.png"),
+                "sizes": "512x512",
+                "type": "image/png",
+                "purpose": "maskable",
+            },
+            {
+                "src": static("icons/safari-pinned-tab.svg"),
+                "sizes": "any",
+                "type": "image/svg+xml",
+                "purpose": "monochrome",
+            },
+        ],
+        "shortcuts": [
+            {
+                "name": "Upcoming",
+                "short_name": "Upcoming",
+                "description": "See what is coming up next",
+                "url": reverse("web:upcoming"),
+            },
+            {
+                "name": "Calendar",
+                "short_name": "Calendar",
+                "description": "Open the family calendar",
+                "url": reverse("web:calendar"),
+            },
+            {
+                "name": "New task",
+                "short_name": "New task",
+                "description": "Add a task for the family",
+                "url": reverse("web:task_create"),
+            },
+            {
+                "name": "Notes",
+                "short_name": "Notes",
+                "description": "Open family notes",
+                "url": reverse("web:note_list"),
+            },
+        ],
+        "launch_handler": {"client_mode": "navigate-existing"},
+        "prefer_related_applications": False,
+    }
+    response = JsonResponse(manifest, json_dumps_params={"indent": 2})
+    response["Content-Type"] = "application/manifest+json"
+    response["Cache-Control"] = "public, max-age=3600"
+    return response
+
+
+@require_GET
+def service_worker(request):
+    """Serve the worker from / so its scope covers the whole application."""
+    source = render_to_string("web/service-worker.js")
+    response = HttpResponse(source, content_type="application/javascript; charset=utf-8")
+    response["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response["Service-Worker-Allowed"] = "/"
+    return response
 
 
 # ---------------------------------------------------------------------------

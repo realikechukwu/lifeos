@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" role="img" aria-labelledby="title description">
+  <title id="title">Family Assistant</title>
+  <desc id="description">Your family's plans, tasks, and notes in one calm place.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#241b66"/>
+      <stop offset="0.5" stop-color="#5847e6"/>
+      <stop offset="1" stop-color="#8a7df9"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientTransform="translate(1020 30) rotate(135) scale(680 620)">
+      <stop stop-color="#d8d4ff" stop-opacity=".45"/>
+      <stop offset="1" stop-color="#d8d4ff" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="170%">
+      <feDropShadow dx="0" dy="20" stdDeviation="22" flood-color="#130d46" flood-opacity=".32"/>
+    </filter>
+  </defs>
+  <rect width="1200" height="630" rx="0" fill="url(#background)"/>
+  <rect width="1200" height="630" fill="url(#glow)"/>
+  <circle cx="1137" cy="-9" r="224" fill="none" stroke="#fff" stroke-opacity=".08" stroke-width="72"/>
+  <circle cx="1066" cy="574" r="155" fill="none" stroke="#fff" stroke-opacity=".07" stroke-width="58"/>
+  <g transform="translate(96 151)" filter="url(#shadow)">
+    <rect width="328" height="328" rx="86" fill="#fff" fill-opacity=".14" stroke="#fff" stroke-opacity=".22" stroke-width="2"/>
+    <path fill="#fff" d="M164 58c-6 0-12 2-17 7L47 154c-8 7-9 20-2 28 7 8 20 9 28 2l10-9v78c0 17 13 30 30 30h102c17 0 30-13 30-30v-78l10 9c8 7 21 6 28-2 7-8 6-21-2-28L181 65c-5-5-11-7-17-7Z"/>
+    <path fill="#6d5ef8" d="M164 235c-6-6-40-27-40-55 0-18 13-31 29-31 10 0 18 5 24 13 6-8 14-13 24-13 16 0 29 13 29 31 0 28-34 49-40 55l-13 12-13-12Z"/>
+  </g>
+  <g fill="#fff" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif">
+    <text x="500" y="276" font-size="70" font-weight="750" letter-spacing="-2">Family Assistant</text>
+    <text x="503" y="344" font-size="29" font-weight="450" fill-opacity=".82">Plans, tasks and notes in one calm place.</text>
+  </g>
+  <g transform="translate(502 398)" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif" font-size="19" font-weight="600">
+    <rect width="142" height="46" rx="23" fill="#fff" fill-opacity=".13"/>
+    <text x="23" y="30" fill="#fff">Calendar</text>
+    <rect x="154" width="104" height="46" rx="23" fill="#fff" fill-opacity=".13"/>
+    <text x="178" y="30" fill="#fff">Tasks</text>
+    <rect x="270" width="107" height="46" rx="23" fill="#fff" fill-opacity=".13"/>
+    <text x="294" y="30" fill="#fff">Notes</text>
+  </g>
+</svg>
