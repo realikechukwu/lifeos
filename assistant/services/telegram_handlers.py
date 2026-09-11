@@ -1591,6 +1591,16 @@ def _release_update_claim(update_id: int) -> None:
     )
 
 
+def _log_voice_failure(*, stage: str, update_id: int, exc: Exception) -> None:
+    """Log only safe operational metadata, never voice or Telegram file data."""
+    logger.warning(
+        "Telegram voice handling failed stage=%s update_id=%s exception_type=%s",
+        stage,
+        update_id,
+        type(exc).__name__,
+    )
+
+
 def _handle_voice_message(
     *, message: dict, chat: TelegramChat, user: TelegramUser, update_id: int, bot: TelegramBot
 ) -> None:
@@ -1631,19 +1641,39 @@ def _handle_voice_message(
     try:
         file_data = bot.get_file(file_id)
         file_path = file_data["file_path"]
-        audio_bytes = bot.download_file(file_path, max_bytes=MAX_VOICE_DOWNLOAD_BYTES)
-        transcript = transcribe_telegram_voice(
-            audio_bytes,
-            filename=bot.safe_audio_filename(file_path),
-            content_type=str(voice.get("mime_type") or "audio/ogg"),
+    except (TelegramAPIError, KeyError, TypeError) as exc:
+        _log_voice_failure(stage="get_file", update_id=update_id, exc=exc)
+        bot.send_message(
+            chat.chat_id,
+            "I couldn’t transcribe that voice note clearly. Please try again or send text.",
         )
-    except TelegramFileTooLargeError:
+        return
+
+    try:
+        audio_bytes = bot.download_file(file_path, max_bytes=MAX_VOICE_DOWNLOAD_BYTES)
+    except TelegramFileTooLargeError as exc:
+        _log_voice_failure(stage="download", update_id=update_id, exc=exc)
         bot.send_message(
             chat.chat_id,
             "That voice note is over 5 MB. Please send a smaller note or send text.",
         )
         return
-    except (TelegramAPIError, TelegramTranscriptionError, KeyError, TypeError):
+    except TelegramAPIError as exc:
+        _log_voice_failure(stage="download", update_id=update_id, exc=exc)
+        bot.send_message(
+            chat.chat_id,
+            "I couldn’t transcribe that voice note clearly. Please try again or send text.",
+        )
+        return
+
+    try:
+        transcript = transcribe_telegram_voice(
+            audio_bytes,
+            filename=bot.safe_audio_filename(file_path),
+            content_type=str(voice.get("mime_type") or "audio/ogg"),
+        )
+    except (TelegramTranscriptionError, TypeError) as exc:
+        _log_voice_failure(stage="transcription", update_id=update_id, exc=exc)
         bot.send_message(
             chat.chat_id,
             "I couldn’t transcribe that voice note clearly. Please try again or send text.",

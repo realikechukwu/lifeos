@@ -145,6 +145,10 @@ class TelegramBot:
     def safe_audio_filename(file_path: str) -> str:
         """Retain a harmless audio suffix for OpenAI's format detection."""
         suffix = PurePosixPath(file_path).suffix.lower()
+        # Telegram commonly names OGG/Opus voice notes with .oga, while the
+        # transcription API documents the equivalent container as .ogg.
+        if suffix == ".oga":
+            suffix = ".ogg"
         if not suffix or len(suffix) > 10 or not suffix[1:].isalnum():
             suffix = ".ogg"
         return f"telegram-voice{suffix}"

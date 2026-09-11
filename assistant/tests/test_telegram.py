@@ -1,10 +1,11 @@
 import json
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from django.test import Client, TestCase, override_settings
 from django.utils import timezone
 
 from assistant.services.extractor import AssistantAction
+from assistant.services.telegram import TelegramAPIError
 from assistant.services.telegram_handlers import process_telegram_update
 from assistant.services.telegram_transcription import TelegramTranscriptionError
 from core.models import (
@@ -42,7 +43,7 @@ class FakeTelegramBot:
 
     @staticmethod
     def safe_audio_filename(file_path):
-        return "telegram-voice.oga"
+        return "telegram-voice.ogg"
 
 
 SETTINGS = {
@@ -288,6 +289,7 @@ class TelegramConversationTests(TestCase):
         self.assertIn("Is this right?", self.bot.messages[-1][1])
         self.assertEqual(self.bot.file_requests, ["voice-file-id"])
         transcribe.assert_called_once()
+        self.assertEqual(transcribe.call_args.kwargs["filename"], "telegram-voice.ogg")
 
     @patch("assistant.services.telegram_handlers.transcribe_telegram_voice")
     def test_unauthorised_voice_never_downloads_or_transcribes(self, transcribe):
@@ -339,10 +341,16 @@ class TelegramConversationTests(TestCase):
     @patch("assistant.services.telegram_handlers.transcribe_telegram_voice")
     def test_failed_or_empty_transcription_is_friendly_and_creates_no_action(self, transcribe):
         transcribe.side_effect = TelegramTranscriptionError("must not be shown")
-        process_telegram_update(voice_update(56), bot=self.bot)
+        with self.assertLogs("assistant.services.telegram_handlers", level="WARNING") as logs:
+            process_telegram_update(voice_update(56), bot=self.bot)
 
         self.assertIn("couldn’t transcribe", self.bot.messages[-1][1])
         self.assertNotIn("must not be shown", self.bot.messages[-1][1])
+        logged = "\n".join(logs.output)
+        self.assertIn("stage=transcription update_id=56", logged)
+        self.assertIn("exception_type=TelegramTranscriptionError", logged)
+        self.assertNotIn("must not be shown", logged)
+        self.assertNotIn("voice/file_1.oga", logged)
         self.assertEqual(TelegramConversation.objects.count(), 0)
         self.assertEqual(ParsedAction.objects.count(), 0)
         self.assertTrue(TelegramUpdate.objects.get(update_id=56).processed)
@@ -380,3 +388,38 @@ class TelegramConversationTests(TestCase):
         self.assertEqual(self.bot.downloads, [])
         transcribe.assert_not_called()
         self.assertFalse(TelegramUpdate.objects.get(update_id=58).processed)
+
+    @patch("assistant.services.telegram_handlers.transcribe_telegram_voice")
+    def test_get_file_failure_logs_only_safe_stage_metadata(self, transcribe):
+        self.bot.get_file = Mock(
+            side_effect=TelegramAPIError("secret-token voice/file_1.oga spoken words")
+        )
+
+        with self.assertLogs("assistant.services.telegram_handlers", level="WARNING") as logs:
+            process_telegram_update(voice_update(59), bot=self.bot)
+
+        logged = "\n".join(logs.output)
+        self.assertIn("stage=get_file update_id=59", logged)
+        self.assertIn("exception_type=TelegramAPIError", logged)
+        self.assertNotIn("secret-token", logged)
+        self.assertNotIn("voice/file_1.oga", logged)
+        self.assertNotIn("spoken words", logged)
+        self.assertEqual(self.bot.downloads, [])
+        transcribe.assert_not_called()
+
+    @patch("assistant.services.telegram_handlers.transcribe_telegram_voice")
+    def test_download_failure_logs_only_safe_stage_metadata(self, transcribe):
+        self.bot.download_file = Mock(
+            side_effect=TelegramAPIError("secret-token voice/file_1.oga spoken words")
+        )
+
+        with self.assertLogs("assistant.services.telegram_handlers", level="WARNING") as logs:
+            process_telegram_update(voice_update(60), bot=self.bot)
+
+        logged = "\n".join(logs.output)
+        self.assertIn("stage=download update_id=60", logged)
+        self.assertIn("exception_type=TelegramAPIError", logged)
+        self.assertNotIn("secret-token", logged)
+        self.assertNotIn("voice/file_1.oga", logged)
+        self.assertNotIn("spoken words", logged)
+        transcribe.assert_not_called()

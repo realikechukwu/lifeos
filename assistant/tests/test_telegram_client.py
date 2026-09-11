@@ -45,7 +45,8 @@ class TelegramClientDownloadTests(SimpleTestCase):
         self.assertEqual(response.read_calls, 0)
 
     def test_audio_filename_preserves_safe_extension(self):
-        self.assertEqual(TelegramBot.safe_audio_filename("voice/file_1.oga"), "telegram-voice.oga")
+        self.assertEqual(TelegramBot.safe_audio_filename("voice/file_1.oga"), "telegram-voice.ogg")
+        self.assertEqual(TelegramBot.safe_audio_filename("voice/file_1.ogg"), "telegram-voice.ogg")
         self.assertEqual(TelegramBot.safe_audio_filename("voice/file"), "telegram-voice.ogg")
 
     @patch("assistant.services.telegram.urlopen")
