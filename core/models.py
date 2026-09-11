@@ -522,6 +522,7 @@ class TelegramUpdate(models.Model):
         TelegramUser, on_delete=models.SET_NULL, null=True, blank=True, related_name="updates"
     )
     processed = models.BooleanField(default=False)
+    processing_started_at = models.DateTimeField(null=True, blank=True)
     error = models.TextField(blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     processed_at = models.DateTimeField(null=True, blank=True)

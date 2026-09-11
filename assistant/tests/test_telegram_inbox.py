@@ -148,6 +148,7 @@ class TelegramInboxTests(TestCase):
 
     def test_main_menu_clearly_separates_manage_and_create_actions(self):
         process_telegram_update(message_update(105, "/start"), bot=self.bot)
+        self.assertIn("short voice note or text", self.bot.messages[-1][1])
         buttons = [
             button["text"]
             for row in self.bot.messages[-1][2]["reply_markup"]["inline_keyboard"]
@@ -375,12 +376,13 @@ class TelegramBriefingTests(TestCase):
 @override_settings(AUTHORISED_EMAIL_IKE="ike@example.com", GOOGLE_CALENDAR_ID="primary")
 class CalendarManagementTests(TestCase):
     def _event(self):
+        event_date = timezone.localdate() + timedelta(days=1)
         email = IncomingEmail.objects.create(gmail_message_id="calendar-manage", outer_sender="ike@example.com")
         action = ParsedAction.objects.create(
             incoming_email=email,
             action_type=ParsedAction.ActionType.CREATE_CALENDAR_EVENT,
             title="Dentist",
-            appointment_date=date(2026, 8, 12),
+            appointment_date=event_date,
         )
         return CalendarEventRecord.objects.create(
             parsed_action=action,
@@ -388,7 +390,7 @@ class CalendarManagementTests(TestCase):
             google_event_id="event-1",
             calendar_id="primary",
             title="Dentist",
-            appointment_date=date(2026, 8, 12),
+            appointment_date=event_date,
             start_time=time(9, 0),
             end_time=time(10, 0),
         )
@@ -397,13 +399,16 @@ class CalendarManagementTests(TestCase):
     @patch("assistant.services.google_calendar.build")
     def test_reschedule_updates_google_and_local_record(self, mock_build, _mock_creds):
         record = self._event()
+        target_date = timezone.localdate() + timedelta(days=2)
         service = MagicMock()
         mock_build.return_value = service
 
-        result = reschedule_calendar_event(record, appointment_date=date(2026, 8, 13), start_time=time(14, 0))
+        result = reschedule_calendar_event(
+            record, appointment_date=target_date, start_time=time(14, 0)
+        )
 
-        self.assertEqual(result.appointment_date, date(2026, 8, 13))
+        self.assertEqual(result.appointment_date, target_date)
         self.assertEqual(result.start_time, time(14, 0))
         self.assertEqual(result.end_time, time(15, 0))
         patch_body = service.events.return_value.patch.call_args.kwargs["body"]
-        self.assertIn("2026-08-13T14:00", patch_body["start"]["dateTime"])
+        self.assertIn(f"{target_date.isoformat()}T14:00", patch_body["start"]["dateTime"])

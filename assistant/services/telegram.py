@@ -6,6 +6,7 @@ token in that URL.
 """
 
 import json
+from pathlib import PurePosixPath
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -13,6 +14,10 @@ from django.conf import settings
 
 
 class TelegramAPIError(RuntimeError):
+    pass
+
+
+class TelegramFileTooLargeError(TelegramAPIError):
     pass
 
 
@@ -33,10 +38,13 @@ class TelegramBot:
         try:
             with urlopen(request, timeout=20) as response:  # noqa: S310 - fixed Telegram API host
                 result = json.loads(response.read().decode("utf-8"))
-        except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
-            raise TelegramAPIError(f"Telegram API request failed for {method}.") from exc
+        except (HTTPError, URLError, TimeoutError, json.JSONDecodeError):
+            # Do not chain urllib errors: their representation can contain the
+            # token-bearing request URL.
+            raise TelegramAPIError(f"Telegram API request failed for {method}.") from None
         if not result.get("ok"):
-            description = str(result.get("description", "unknown Telegram API error"))[:500]
+            description = str(result.get("description", "unknown Telegram API error"))
+            description = description.replace(self.token, "[redacted]")[:500]
             raise TelegramAPIError(f"Telegram API rejected {method}: {description}")
         return result.get("result", {})
 
@@ -95,3 +103,48 @@ class TelegramBot:
 
     def get_webhook_info(self) -> dict:
         return self.call("getWebhookInfo")
+
+    def get_file(self, file_id: str) -> dict:
+        """Resolve a Telegram file id without exposing its download path."""
+        result = self.call("getFile", {"file_id": file_id})
+        if not isinstance(result, dict) or not isinstance(result.get("file_path"), str):
+            raise TelegramAPIError("Telegram returned an unreadable file reference.")
+        return result
+
+    def download_file(self, file_path: str, *, max_bytes: int) -> bytes:
+        """Download a Telegram file with a timeout and a strict byte limit."""
+        if not file_path or max_bytes < 1:
+            raise TelegramAPIError("Telegram file download parameters are invalid.")
+        request = Request(
+            f"https://api.telegram.org/file/bot{self.token}/{file_path}",
+            method="GET",
+        )
+        try:
+            with urlopen(request, timeout=30) as response:  # noqa: S310 - fixed Telegram API host
+                content_length = response.headers.get("Content-Length")
+                if content_length and int(content_length) > max_bytes:
+                    raise TelegramFileTooLargeError("Telegram file exceeds the download limit.")
+                chunks = []
+                downloaded = 0
+                while True:
+                    chunk = response.read(min(64 * 1024, max_bytes - downloaded + 1))
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    downloaded += len(chunk)
+                    if downloaded > max_bytes:
+                        raise TelegramFileTooLargeError("Telegram file exceeds the download limit.")
+                return b"".join(chunks)
+        except TelegramFileTooLargeError:
+            raise
+        except (HTTPError, URLError, TimeoutError, OSError, ValueError):
+            # Never expose or chain the download URL because it embeds the bot token.
+            raise TelegramAPIError("Telegram file download failed.") from None
+
+    @staticmethod
+    def safe_audio_filename(file_path: str) -> str:
+        """Retain a harmless audio suffix for OpenAI's format detection."""
+        suffix = PurePosixPath(file_path).suffix.lower()
+        if not suffix or len(suffix) > 10 or not suffix[1:].isalnum():
+            suffix = ".ogg"
+        return f"telegram-voice{suffix}"

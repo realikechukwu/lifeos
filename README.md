@@ -109,7 +109,12 @@ bot command menu. Requests are accepted only when Telegram supplies the
 configured webhook-secret header and the immutable sender id matches
 `TELEGRAM_IKE_USER_ID` or `TELEGRAM_WIFE_USER_ID`.
 
-Each authorised user can `/start` the bot privately. For the shared group,
+Each authorised user can `/start` the bot privately and send either text or a
+short voice note (up to 2 minutes and 5 MB). Voice is transcribed in the spoken
+language, acknowledged back to the user, and then follows the same clarification
+and explicit-confirmation flow as typed text. For example: “Remind both of us on
+Friday at 6pm to renew the insurance.” Raw audio is deleted immediately after
+transcription and is never stored by LifeOS. For the shared group,
 Ike sends `/linkgroup` once inside it; only the configured owner id can enrol a
 group. Alternatively, put the group's negative numeric id in
 `TELEGRAM_ALLOWED_GROUP_CHAT_IDS`. BotFather's Group Privacy must be off for

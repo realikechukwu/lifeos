@@ -2,9 +2,11 @@ import json
 from unittest.mock import patch
 
 from django.test import Client, TestCase, override_settings
+from django.utils import timezone
 
 from assistant.services.extractor import AssistantAction
 from assistant.services.telegram_handlers import process_telegram_update
+from assistant.services.telegram_transcription import TelegramTranscriptionError
 from core.models import (
     IncomingEmail,
     ParsedAction,
@@ -19,6 +21,8 @@ class FakeTelegramBot:
     def __init__(self):
         self.messages = []
         self.callbacks = []
+        self.file_requests = []
+        self.downloads = []
 
     def send_message(self, chat_id, text, **kwargs):
         self.messages.append((chat_id, text, kwargs))
@@ -27,6 +31,18 @@ class FakeTelegramBot:
     def answer_callback(self, callback_query_id, text=""):
         self.callbacks.append((callback_query_id, text))
         return True
+
+    def get_file(self, file_id):
+        self.file_requests.append(file_id)
+        return {"file_path": "voice/file_1.oga"}
+
+    def download_file(self, file_path, *, max_bytes):
+        self.downloads.append((file_path, max_bytes))
+        return b"SECRET RAW AUDIO"
+
+    @staticmethod
+    def safe_audio_filename(file_path):
+        return "telegram-voice.oga"
 
 
 SETTINGS = {
@@ -56,6 +72,29 @@ def message_update(update_id, *, user_id=446464092, chat_id=None, chat_type="pri
             "text": text,
         },
     }
+
+
+def voice_update(
+    update_id,
+    *,
+    user_id=446464092,
+    chat_id=None,
+    chat_type="private",
+    duration=8,
+    file_size=2048,
+    file_id="voice-file-id",
+):
+    payload = message_update(
+        update_id, user_id=user_id, chat_id=chat_id, chat_type=chat_type, text=""
+    )
+    payload["message"].pop("text")
+    payload["message"]["voice"] = {
+        "duration": duration,
+        "file_size": file_size,
+        "file_id": file_id,
+        "mime_type": "audio/ogg",
+    }
+    return payload
 
 
 @override_settings(**SETTINGS)
@@ -222,3 +261,122 @@ class TelegramConversationTests(TestCase):
             outer_sender="ike@example.com",
         )
         self.assertEqual(incoming.source, IncomingEmail.Source.EMAIL)
+
+    @patch("assistant.services.telegram_handlers.extract_telegram_action")
+    @patch("assistant.services.telegram_handlers.transcribe_telegram_voice")
+    def test_authorised_voice_is_transcribed_and_routed_to_text_flow(self, transcribe, extract):
+        transcribe.return_value = "Remind both of us on Friday at 6pm to renew <insurance>"
+        extract.return_value = AssistantAction(
+            action_type="create_email_reminder",
+            title="Renew insurance",
+            reminder_date="2026-09-18",
+            reminder_time="18:00",
+            reminder_recipient="both",
+            confidence=0.98,
+        )
+
+        process_telegram_update(voice_update(50), bot=self.bot)
+
+        conversation = TelegramConversation.objects.get()
+        self.assertEqual(conversation.status, TelegramConversation.Status.AWAITING_CONFIRMATION)
+        self.assertEqual(
+            conversation.transcript[0]["text"],
+            "Remind both of us on Friday at 6pm to renew <insurance>",
+        )
+        self.assertIn("&lt;insurance&gt;", self.bot.messages[0][1])
+        self.assertIn("I heard", self.bot.messages[0][1])
+        self.assertIn("Is this right?", self.bot.messages[-1][1])
+        self.assertEqual(self.bot.file_requests, ["voice-file-id"])
+        transcribe.assert_called_once()
+
+    @patch("assistant.services.telegram_handlers.transcribe_telegram_voice")
+    def test_unauthorised_voice_never_downloads_or_transcribes(self, transcribe):
+        process_telegram_update(voice_update(51, user_id=999, chat_id=999), bot=self.bot)
+
+        self.assertEqual(self.bot.file_requests, [])
+        self.assertEqual(self.bot.downloads, [])
+        transcribe.assert_not_called()
+        self.assertEqual(TelegramUpdate.objects.get(update_id=51).update_type, "unauthorised")
+
+    @patch("assistant.services.telegram_handlers.extract_telegram_action")
+    @patch("assistant.services.telegram_handlers.transcribe_telegram_voice", return_value="9am")
+    def test_voice_can_answer_an_active_clarification(self, transcribe, extract):
+        extract.side_effect = [
+            AssistantAction(
+                action_type="create_calendar_event",
+                title="Dentist",
+                appointment_date="2026-09-18",
+                confidence=0.9,
+                missing_fields=["start_time"],
+            ),
+            AssistantAction(
+                action_type="create_calendar_event",
+                title="Dentist",
+                appointment_date="2026-09-18",
+                start_time="09:00",
+                confidence=0.98,
+            ),
+        ]
+        process_telegram_update(message_update(52, text="Dentist on Friday"), bot=self.bot)
+        process_telegram_update(voice_update(53), bot=self.bot)
+
+        conversation = TelegramConversation.objects.get()
+        self.assertEqual(conversation.status, TelegramConversation.Status.AWAITING_CONFIRMATION)
+        self.assertEqual(conversation.transcript[-1], {"role": "user", "text": "9am"})
+        transcribe.assert_called_once()
+
+    @patch("assistant.services.telegram_handlers.transcribe_telegram_voice")
+    def test_oversized_voice_notes_are_rejected_before_download(self, transcribe):
+        process_telegram_update(voice_update(54, duration=121), bot=self.bot)
+        process_telegram_update(voice_update(55, file_size=5 * 1024 * 1024 + 1), bot=self.bot)
+
+        self.assertEqual(self.bot.file_requests, [])
+        self.assertEqual(self.bot.downloads, [])
+        transcribe.assert_not_called()
+        self.assertIn("over 2 minutes", self.bot.messages[0][1])
+        self.assertIn("over 5 MB", self.bot.messages[1][1])
+
+    @patch("assistant.services.telegram_handlers.transcribe_telegram_voice")
+    def test_failed_or_empty_transcription_is_friendly_and_creates_no_action(self, transcribe):
+        transcribe.side_effect = TelegramTranscriptionError("must not be shown")
+        process_telegram_update(voice_update(56), bot=self.bot)
+
+        self.assertIn("couldn’t transcribe", self.bot.messages[-1][1])
+        self.assertNotIn("must not be shown", self.bot.messages[-1][1])
+        self.assertEqual(TelegramConversation.objects.count(), 0)
+        self.assertEqual(ParsedAction.objects.count(), 0)
+        self.assertTrue(TelegramUpdate.objects.get(update_id=56).processed)
+
+    @patch("assistant.services.telegram_handlers.extract_telegram_action")
+    @patch("assistant.services.telegram_handlers.transcribe_telegram_voice", return_value="Buy milk")
+    def test_voice_audio_is_not_persisted_and_duplicate_processes_once(self, transcribe, extract):
+        extract.return_value = AssistantAction(
+            action_type="create_task",
+            title="Buy milk",
+            assigned_to="ike",
+            confidence=0.99,
+        )
+        payload = voice_update(57)
+        process_telegram_update(payload, bot=self.bot)
+        process_telegram_update(payload, bot=self.bot)
+
+        self.assertEqual(self.bot.file_requests, ["voice-file-id"])
+        self.assertEqual(len(self.bot.downloads), 1)
+        transcribe.assert_called_once()
+        extract.assert_called_once()
+        self.assertNotIn("SECRET RAW AUDIO", IncomingEmail.objects.get().body_text)
+        self.assertNotIn("SECRET RAW AUDIO", str(TelegramConversation.objects.get().transcript))
+        update = TelegramUpdate.objects.get(update_id=57)
+        self.assertNotIn("SECRET RAW AUDIO", update.error)
+        self.assertTrue(update.processed)
+
+    @patch("assistant.services.telegram_handlers.transcribe_telegram_voice")
+    def test_in_progress_duplicate_does_not_download_or_transcribe(self, transcribe):
+        TelegramUpdate.objects.create(update_id=58, processing_started_at=timezone.now())
+
+        process_telegram_update(voice_update(58), bot=self.bot)
+
+        self.assertEqual(self.bot.file_requests, [])
+        self.assertEqual(self.bot.downloads, [])
+        transcribe.assert_not_called()
+        self.assertFalse(TelegramUpdate.objects.get(update_id=58).processed)

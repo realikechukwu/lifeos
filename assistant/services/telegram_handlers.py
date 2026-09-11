@@ -28,8 +28,9 @@ from core.models import (
 
 from .router import admin_approve_and_execute, build_parsed_action_from_extraction
 from .tasks import complete_task
-from .telegram import TelegramBot
+from .telegram import TelegramAPIError, TelegramBot, TelegramFileTooLargeError
 from .telegram_extractor import extract_telegram_action
+from .telegram_transcription import TelegramTranscriptionError, transcribe_telegram_voice
 from .telegram_inbox import (
     PAGE_SIZE,
     calendar_item_for_shift,
@@ -53,6 +54,16 @@ ACTIVE_STATUSES = (
     TelegramConversation.Status.AWAITING_CLARIFICATION,
     TelegramConversation.Status.AWAITING_CONFIRMATION,
 )
+
+# Voice notes are deliberately short and bounded before any transcription work.
+MAX_VOICE_DURATION_SECONDS = 120
+MAX_VOICE_DOWNLOAD_BYTES = 5 * 1024 * 1024
+# A crashed worker can be retried, while concurrent deliveries cannot double-process.
+UPDATE_PROCESSING_LEASE = timedelta(minutes=10)
+
+
+class TelegramVoiceProcessingError(RuntimeError):
+    """A redacted transient failure after voice transcription."""
 
 
 def _button(text: str, callback_data: str) -> dict:
@@ -1030,7 +1041,9 @@ def _handle_command(
     if command in ("/start", "/help"):
         bot.send_message(
             chat.chat_id,
-            "Hello — I’m LifeOS. Tell me naturally what you want to remember, schedule, or get done. "
+            "Hello — I’m LifeOS. Send a short voice note or text telling me naturally what you want "
+            "to remember, schedule, or get done. For example: “Remind both of us on Friday at 6pm "
+            "to renew the insurance.” "
             "I’ll ask if anything is unclear and show you a confirmation before acting.\n\n"
             "<b>View & manage</b> is at the top of the menu; <b>➕ Add something new</b> is at the bottom.",
             reply_markup=main_menu(),
@@ -1539,6 +1552,114 @@ def _handle_callback(data: str, chat: TelegramChat, user: TelegramUser, bot: Tel
         _extract_and_respond(conversation, bot)
 
 
+def _claim_update(update_id: int) -> TelegramUpdate | None:
+    """Claim an update briefly; never keep the transaction open over network I/O."""
+    now = timezone.now()
+    with transaction.atomic():
+        TelegramUpdate.objects.get_or_create(update_id=update_id)
+        update = TelegramUpdate.objects.select_for_update().get(update_id=update_id)
+        if update.processed:
+            return None
+        if (
+            update.processing_started_at
+            and update.processing_started_at >= now - UPDATE_PROCESSING_LEASE
+        ):
+            return None
+        update.processing_started_at = now
+        update.error = ""
+        update.save(update_fields=["processing_started_at", "error"])
+        return update
+
+
+def _finish_update(update: TelegramUpdate, *, update_type: str | None = None) -> None:
+    if update_type is not None:
+        update.update_type = update_type
+    update.processed = True
+    update.processing_started_at = None
+    update.error = ""
+    update.processed_at = timezone.now()
+    update.save(
+        update_fields=[
+            "update_type", "processed", "processing_started_at", "error", "processed_at"
+        ]
+    )
+
+
+def _release_update_claim(update_id: int) -> None:
+    TelegramUpdate.objects.filter(update_id=update_id, processed=False).update(
+        processing_started_at=None
+    )
+
+
+def _handle_voice_message(
+    *, message: dict, chat: TelegramChat, user: TelegramUser, update_id: int, bot: TelegramBot
+) -> None:
+    voice = message.get("voice")
+    if not isinstance(voice, dict):
+        return
+
+    duration = voice.get("duration")
+    if not isinstance(duration, (int, float)) or isinstance(duration, bool) or duration <= 0:
+        bot.send_message(chat.chat_id, "I couldn’t read that voice note. Please try again or send text.")
+        return
+    if duration > MAX_VOICE_DURATION_SECONDS:
+        bot.send_message(
+            chat.chat_id,
+            "That voice note is over 2 minutes. Please send a shorter note or send text.",
+        )
+        return
+
+    advertised_size = voice.get("file_size")
+    if advertised_size is not None and (
+        not isinstance(advertised_size, int) or isinstance(advertised_size, bool)
+        or advertised_size < 0
+    ):
+        bot.send_message(chat.chat_id, "I couldn’t read that voice note. Please try again or send text.")
+        return
+    if advertised_size is not None and advertised_size > MAX_VOICE_DOWNLOAD_BYTES:
+        bot.send_message(
+            chat.chat_id,
+            "That voice note is over 5 MB. Please send a smaller note or send text.",
+        )
+        return
+
+    file_id = voice.get("file_id")
+    if not isinstance(file_id, str) or not file_id:
+        bot.send_message(chat.chat_id, "I couldn’t read that voice note. Please try again or send text.")
+        return
+
+    try:
+        file_data = bot.get_file(file_id)
+        file_path = file_data["file_path"]
+        audio_bytes = bot.download_file(file_path, max_bytes=MAX_VOICE_DOWNLOAD_BYTES)
+        transcript = transcribe_telegram_voice(
+            audio_bytes,
+            filename=bot.safe_audio_filename(file_path),
+            content_type=str(voice.get("mime_type") or "audio/ogg"),
+        )
+    except TelegramFileTooLargeError:
+        bot.send_message(
+            chat.chat_id,
+            "That voice note is over 5 MB. Please send a smaller note or send text.",
+        )
+        return
+    except (TelegramAPIError, TelegramTranscriptionError, KeyError, TypeError):
+        bot.send_message(
+            chat.chat_id,
+            "I couldn’t transcribe that voice note clearly. Please try again or send text.",
+        )
+        return
+
+    heard = html.escape(transcript[:3500])
+    bot.send_message(chat.chat_id, f"🎙 I heard: “{heard}”")
+    try:
+        _handle_text(chat=chat, user=user, text=transcript, update_id=update_id, bot=bot)
+    except Exception:
+        # Preserve the webhook retry while keeping transcript-bearing SDK errors
+        # out of logs and the TelegramUpdate error field.
+        raise TelegramVoiceProcessingError("Voice command processing failed.") from None
+
+
 def process_telegram_update(payload: dict, *, bot: TelegramBot | None = None) -> None:
     """Process one update idempotently. Raises on transient failures so
     Telegram retries the same update; already-completed update ids are no-ops."""
@@ -1546,50 +1667,50 @@ def process_telegram_update(payload: dict, *, bot: TelegramBot | None = None) ->
     if not isinstance(update_id, int):
         raise ValueError("Telegram update_id is missing or invalid.")
 
-    update, _ = TelegramUpdate.objects.get_or_create(update_id=update_id)
-    if update.processed:
+    update = _claim_update(update_id)
+    if update is None:
         return
+    try:
+        callback = payload.get("callback_query")
+        message = payload.get("message")
+        envelope = callback.get("message") if callback else message
+        sender_data = callback.get("from") if callback else (message or {}).get("from")
+        if not envelope or not sender_data or not envelope.get("chat"):
+            _finish_update(update, update_type="ignored")
+            return
 
-    callback = payload.get("callback_query")
-    message = payload.get("message")
-    envelope = callback.get("message") if callback else message
-    sender_data = callback.get("from") if callback else (message or {}).get("from")
-    if not envelope or not sender_data or not envelope.get("chat"):
-        update.update_type = "ignored"
-        update.processed = True
-        update.processed_at = timezone.now()
-        update.save(update_fields=["update_type", "processed", "processed_at"])
-        return
+        user = _upsert_user(sender_data)
+        if user is None:
+            _finish_update(update, update_type="unauthorised")
+            return
+        chat = _upsert_chat(envelope["chat"], user)
+        update.chat = chat
+        update.user = user
+        update.update_type = "callback_query" if callback else "message"
+        update.save(update_fields=["chat", "user", "update_type"])
 
-    user = _upsert_user(sender_data)
-    if user is None:
-        update.update_type = "unauthorised"
-        update.processed = True
-        update.processed_at = timezone.now()
-        update.save(update_fields=["update_type", "processed", "processed_at"])
-        return
-    chat = _upsert_chat(envelope["chat"], user)
-    update.chat = chat
-    update.user = user
-    update.update_type = "callback_query" if callback else "message"
-    update.save(update_fields=["chat", "user", "update_type"])
+        bot = bot or TelegramBot()
+        if callback:
+            bot.answer_callback(str(callback.get("id", "")))
+            if chat.authorised:
+                _handle_callback(str(callback.get("data", "")), chat, user, bot)
+        else:
+            text = str(message.get("text", "")).strip()
+            if text:
+                command_match = re.match(r"^(/[^\s]+)", text)
+                handled = command_match and _handle_command(
+                    command_match.group(1), command_text=text, chat=chat, user=user, bot=bot
+                )
+                if not handled and chat.authorised:
+                    _handle_text(chat=chat, user=user, text=text, update_id=update_id, bot=bot)
+            elif message.get("voice") and chat.authorised:
+                update.update_type = "voice_message"
+                update.save(update_fields=["update_type"])
+                _handle_voice_message(
+                    message=message, chat=chat, user=user, update_id=update_id, bot=bot
+                )
 
-    bot = bot or TelegramBot()
-    if callback:
-        bot.answer_callback(str(callback.get("id", "")))
-        if chat.authorised:
-            _handle_callback(str(callback.get("data", "")), chat, user, bot)
-    else:
-        text = str(message.get("text", "")).strip()
-        if text:
-            command_match = re.match(r"^(/[^\s]+)", text)
-            handled = command_match and _handle_command(
-                command_match.group(1), command_text=text, chat=chat, user=user, bot=bot
-            )
-            if not handled and chat.authorised:
-                _handle_text(chat=chat, user=user, text=text, update_id=update_id, bot=bot)
-
-    update.processed = True
-    update.error = ""
-    update.processed_at = timezone.now()
-    update.save(update_fields=["processed", "error", "processed_at"])
+        _finish_update(update)
+    except Exception:
+        _release_update_claim(update_id)
+        raise
