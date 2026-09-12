@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from django.db.models import F, Q
 from django.urls import reverse
 from django.utils import timezone
 
@@ -62,7 +63,70 @@ class FeedItem:
     location: str
     detail_url: str | None
     is_overdue: bool = False
+    is_attention: bool = False
+    display_when: str = ""
+    details_when: str = ""
+    display_date: date | None = None
     extra_links: list = field(default_factory=list)  # [(label, url), ...]
+
+
+@dataclass
+class FeedSection:
+    date: date
+    label: str
+    items: list[FeedItem]
+    is_today: bool = False
+
+
+def _relative_when(d: date | None, t: time | None, *, today: date, all_day: bool = False) -> str:
+    if d is None:
+        return ""
+    day_delta = (d - today).days
+    if day_delta < 0:
+        day_label = f"{abs(day_delta)} day{'s' if day_delta != -1 else ''} overdue"
+    elif day_delta == 0:
+        day_label = "Today"
+    elif day_delta == 1:
+        day_label = "Tomorrow"
+    else:
+        day_label = f"In {day_delta} days"
+    if all_day:
+        return f"{day_label} · All day"
+    if t:
+        return f"{day_label} · {t.strftime('%H:%M')}"
+    return day_label
+
+
+def build_upcoming_sections(items: list[FeedItem], *, today: date | None = None) -> list[FeedSection]:
+    """Group non-attention feed items into dated agenda sections.
+
+    Today is always returned so the landing page retains a stable point of
+    orientation, even on a quiet day. Undated items belong in the attention
+    collection and are deliberately omitted here.
+    """
+    today = today or timezone.localdate()
+    by_date: dict[date, list[FeedItem]] = {today: []}
+    for item in items:
+        if item.is_attention or item.when is None:
+            continue
+        item_date = item.display_date or timezone.localtime(item.when).date()
+        by_date.setdefault(item_date, []).append(item)
+
+    sections = []
+    for section_date in sorted(by_date):
+        if section_date == today:
+            label = "Today"
+        elif section_date == today + timedelta(days=1):
+            label = "Tomorrow"
+        else:
+            label = section_date.strftime("%A %-d %B")
+        sections.append(FeedSection(
+            date=section_date,
+            label=label,
+            items=by_date[section_date],
+            is_today=section_date == today,
+        ))
+    return sections
 
 
 def build_upcoming_feed(user, *, window_days: int = UPCOMING_WINDOW_DAYS) -> list[FeedItem]:
@@ -82,14 +146,23 @@ def build_upcoming_feed(user, *, window_days: int = UPCOMING_WINDOW_DAYS) -> lis
         title = event.title
         if event.recurrence_description:
             title = f"{title} — {event.recurrence_description}"
+        details_when = _format_when(event.appointment_date, event.start_time, event.all_day)
+        if not event.all_day and event.end_time:
+            details_when += f" – {event.end_time.strftime('%H:%M')}"
+            if event.start_time and event.end_time < event.start_time:
+                details_when += " (next day)"
         items.append(FeedItem(
             kind="calendar_event",
             kind_label="Calendar event",
             title=title,
             when=_aware(event.appointment_date, event.start_time),
             when_label=_format_when(event.appointment_date, event.start_time, event.all_day),
+            details_when=details_when,
             assignee="",
             status="Scheduled",
+            display_when=_relative_when(
+                event.appointment_date, event.start_time, today=today, all_day=event.all_day
+            ),
             location=event.location,
             detail_url=None,
             extra_links=[("Open in Google Calendar", gcal_url)] if gcal_url else [],
@@ -100,18 +173,33 @@ def build_upcoming_feed(user, *, window_days: int = UPCOMING_WINDOW_DAYS) -> lis
     end_of_window = _aware(horizon + timedelta(days=1))
     work_shifts = work_shifts.filter(starts_at__gte=start_of_window, starts_at__lt=end_of_window)
     for shift in work_shifts:
-        local_start = _shift_local_datetime(shift)
+        local_start = _shift_local_datetime(shift) if shift.all_day else timezone.localtime(shift.starts_at)
+        details_when = _format_when(local_start.date(), local_start.time(), shift.all_day)
+        if shift.ends_at:
+            local_end = timezone.localtime(shift.ends_at, local_start.tzinfo)
+            if shift.all_day:
+                last_day = (local_end - timedelta(microseconds=1)).date()
+                if last_day > local_start.date():
+                    details_when = f"{local_start.strftime('%a %d %b')} – {last_day.strftime('%a %d %b %Y')} (all day)"
+            else:
+                details_when += " – " + (local_end.strftime('%a %d %b %H:%M') if local_end.date() != local_start.date() else local_end.strftime('%H:%M'))
         gcal_url = build_google_calendar_event_url(shift.google_event_id, shift.calendar_id)
         items.append(FeedItem(
             kind="work_shift",
             kind_label="Ike work shift",
             title=shift.display_title,
             when=shift.starts_at,
+            display_date=local_start.date(),
+            details_when=details_when,
             when_label=_format_when(
                 local_start.date(), local_start.timetz().replace(tzinfo=None), shift.all_day
             ),
             assignee="Ike",
             status="Scheduled",
+            display_when=_relative_when(
+                local_start.date(), local_start.timetz().replace(tzinfo=None),
+                today=today, all_day=shift.all_day,
+            ),
             location="",
             detail_url=None,
             extra_links=[("Open in Google Calendar", gcal_url)] if gcal_url else [],
@@ -135,9 +223,17 @@ def build_upcoming_feed(user, *, window_days: int = UPCOMING_WINDOW_DAYS) -> lis
             location="",
             detail_url=reverse("web:task_list") + f"?highlight={task.id}",
             is_overdue=overdue,
+            is_attention=overdue,
+            display_when=_relative_when(task.due_date, task.due_time, today=today),
         ))
 
-    for reminder in Reminder.objects.filter(status=Reminder.Status.PENDING):
+    for reminder in Reminder.objects.filter(
+        status=Reminder.Status.PENDING, reminder_date__lte=horizon
+    ):
+        overdue = _aware(reminder.reminder_date, reminder.reminder_time) < timezone.now()
+        display_when = _relative_when(reminder.reminder_date, reminder.reminder_time, today=today)
+        if overdue and reminder.reminder_date == today:
+            display_when = f"Due earlier today · {reminder.reminder_time.strftime('%H:%M')}"
         items.append(FeedItem(
             kind="reminder",
             kind_label="Reminder",
@@ -145,9 +241,12 @@ def build_upcoming_feed(user, *, window_days: int = UPCOMING_WINDOW_DAYS) -> lis
             when=_aware(reminder.reminder_date, reminder.reminder_time),
             when_label=_format_when(reminder.reminder_date, reminder.reminder_time, False),
             assignee=reminder.get_recipient_display(),
-            status=reminder.get_status_display(),
+            status="Overdue" if overdue else reminder.get_status_display(),
             location="",
             detail_url=None,
+            is_overdue=overdue,
+            is_attention=overdue,
+            display_when=display_when,
         ))
 
     review_actions = ParsedAction.objects.filter(status=ParsedAction.Status.PENDING_REVIEW).select_related(
@@ -166,6 +265,13 @@ def build_upcoming_feed(user, *, window_days: int = UPCOMING_WINDOW_DAYS) -> lis
             status="Pending review",
             location="",
             detail_url=detail_url,
+            is_attention=True,
+            display_when=(
+                f"Received today · {timezone.localtime(received).strftime('%H:%M')}"
+                if received and timezone.localtime(received).date() == today
+                else f"Received {timezone.localtime(received).strftime('%-d %b')}"
+                if received else "Awaiting review"
+            ),
         ))
 
     far_future = _far_future()
@@ -203,7 +309,11 @@ def build_calendar_feed(start: date | None, end: date | None) -> list[dict]:
 
     calendar_qs = CalendarEventRecord.objects.all()
     if start:
-        calendar_qs = calendar_qs.filter(appointment_date__gte=start)
+        calendar_qs = calendar_qs.filter(
+            Q(appointment_date__gte=start) |
+            Q(appointment_date=start - timedelta(days=1), all_day=False,
+              end_time__lt=F("start_time"), end_time__gt=time.min)
+        )
     if end:
         calendar_qs = calendar_qs.filter(appointment_date__lt=end)
     for event in calendar_qs:
@@ -213,6 +323,8 @@ def build_calendar_feed(start: date | None, end: date | None) -> list[dict]:
             all_day = False
             fc_start = _combine_iso(event.appointment_date, event.start_time)
             fc_end = _combine_iso(event.appointment_date, event.end_time) if event.end_time else None
+            if event.start_time and event.end_time and event.end_time < event.start_time:
+                fc_end = _combine_iso(event.appointment_date + timedelta(days=1), event.end_time)
         title = event.title
         if event.recurrence_description:
             title = f"{title} — {event.recurrence_description}"
@@ -225,6 +337,7 @@ def build_calendar_feed(start: date | None, end: date | None) -> list[dict]:
             "color": "#2563eb",
             "extendedProps": {
                 "type": "Calendar event",
+                "category": "event",
                 "status": "Scheduled",
                 "location": event.location,
                 "assignee": "",
@@ -236,11 +349,14 @@ def build_calendar_feed(start: date | None, end: date | None) -> list[dict]:
 
     work_shift_qs = PatchworkShift.objects.filter(active=True)
     if start:
-        work_shift_qs = work_shift_qs.filter(starts_at__gte=_aware(start))
+        # Include shifts already in progress at the start of the visible range.
+        work_shift_qs = work_shift_qs.filter(
+            Q(starts_at__gte=_aware(start)) | Q(ends_at__gt=_aware(start))
+        )
     if end:
         work_shift_qs = work_shift_qs.filter(starts_at__lt=_aware(end))
     for shift in work_shift_qs:
-        local_start = _shift_local_datetime(shift)
+        local_start = _shift_local_datetime(shift) if shift.all_day else timezone.localtime(shift.starts_at)
         local_end = timezone.localtime(shift.ends_at, local_start.tzinfo) if shift.ends_at else None
         if shift.all_day:
             fc_start = local_start.date().isoformat()
@@ -257,6 +373,7 @@ def build_calendar_feed(start: date | None, end: date | None) -> list[dict]:
             "color": "#7c3aed",
             "extendedProps": {
                 "type": "Ike work shift",
+                "category": "work",
                 "status": "Scheduled",
                 "location": "",
                 "assignee": "Ike",
@@ -279,8 +396,12 @@ def build_calendar_feed(start: date | None, end: date | None) -> list[dict]:
             "start": _combine_iso(task.due_date, task.due_time),
             "allDay": task.due_time is None,
             "color": "#dc2626" if overdue else "#f59e0b",
+            "textColor": "#ffffff" if overdue else "#29200c",
             "extendedProps": {
                 "type": "Task due date",
+                "category": "task",
+                "isOverdue": overdue,
+                "detailUrl": reverse("web:task_list") + f"?highlight={task.id}",
                 "status": task.get_status_display(),
                 "location": "",
                 "assignee": task.get_assigned_to_display(),
@@ -300,8 +421,10 @@ def build_calendar_feed(start: date | None, end: date | None) -> list[dict]:
             "start": _combine_iso(reminder.reminder_date, reminder.reminder_time),
             "allDay": False,
             "color": "#16a34a",
+            "textColor": "#08220f",
             "extendedProps": {
                 "type": "Reminder",
+                "category": "reminder",
                 "status": reminder.get_status_display(),
                 "location": "",
                 "assignee": reminder.get_recipient_display(),

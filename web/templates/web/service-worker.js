@@ -1,6 +1,6 @@
 {% load static %}
 const CACHE_PREFIX = "family-assistant-public-";
-const CACHE_NAME = `${CACHE_PREFIX}v1`;
+const CACHE_NAME = `${CACHE_PREFIX}v2`;
 const OFFLINE_URL = "{% static 'offline.html' %}";
 const STATIC_PATH = new URL("{% get_static_prefix %}", self.location.origin).pathname;
 const PUBLIC_ASSETS = [
@@ -48,6 +48,9 @@ async function cachePublicAsset(request) {
 }
 
 self.addEventListener("fetch", (event) => {
+  // Local previews reuse unversioned asset URLs while files are being edited.
+  // Keep those fresh; production collectstatic supplies fingerprinted assets.
+  if (["localhost", "127.0.0.1"].includes(self.location.hostname)) return;
   const {request} = event;
   if (request.method !== "GET") return;
 

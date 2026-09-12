@@ -148,7 +148,11 @@ class TelegramInboxTests(TestCase):
 
     def test_main_menu_clearly_separates_manage_and_create_actions(self):
         process_telegram_update(message_update(105, "/start"), bot=self.bot)
-        self.assertIn("short voice note or text", self.bot.messages[-1][1])
+        self.assertEqual(
+            self.bot.messages[-1][1],
+            "Hi, I’m LifeOS. Send a voice note or text. I’ll clarify anything unclear and ask for "
+            "confirmation before making changes.",
+        )
         buttons = [
             button["text"]
             for row in self.bot.messages[-1][2]["reply_markup"]["inline_keyboard"]

@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load static %}
 {% block title %}Calendar — Family Assistant{% endblock %}
 
 {% block extra_head %}
@@ -9,40 +10,61 @@
 <div class="page-head">
   <div>
     <h1 class="page-title">Calendar</h1>
-    <p class="page-sub">Events, work shifts, task due dates and reminders in one view. Tap anything for details.</p>
+    <p class="page-sub">Your family schedule. Select an item for details.</p>
   </div>
 </div>
 
-<div class="legend">
-  <span class="legend-item"><span class="legend-swatch" style="background:#2563eb"></span> Events</span>
-  <span class="legend-item"><span class="legend-swatch" style="background:#7c3aed"></span> Ike work shift</span>
-  <span class="legend-item"><span class="legend-swatch" style="background:#f59e0b"></span> Task due</span>
-  <span class="legend-item"><span class="legend-swatch" style="background:#dc2626"></span> Overdue</span>
-  <span class="legend-item"><span class="legend-swatch" style="background:#16a34a"></span> Reminders</span>
+<div class="calendar-controls" aria-label="Calendar controls">
+  <div class="calendar-today-strip" id="calendarTodayStrip">
+    <div>
+      <span class="calendar-today-label">Today</span>
+      <time id="calendarTodayDate"></time>
+      <span id="calendarTodaySummary" class="calendar-today-summary" role="status"></span>
+    </div>
+    <button type="button" class="btn btn-outline-primary btn-sm" id="calendarJumpToday">
+      <i class="bi bi-crosshair" aria-hidden="true"></i> Jump to today
+    </button>
+  </div>
+
+  <div class="calendar-filter-row" aria-label="Filter calendar items by type">
+    <button type="button" class="calendar-filter active" data-calendar-category="event" aria-pressed="true"><i class="bi bi-calendar-event" aria-hidden="true"></i> Events</button>
+    <button type="button" class="calendar-filter active" data-calendar-category="work" aria-pressed="true"><i class="bi bi-briefcase" aria-hidden="true"></i> Work</button>
+    <button type="button" class="calendar-filter active" data-calendar-category="task" aria-pressed="true"><i class="bi bi-check2-square" aria-hidden="true"></i> Tasks</button>
+    <button type="button" class="calendar-filter active" data-calendar-category="reminder" aria-pressed="true"><i class="bi bi-bell" aria-hidden="true"></i> Reminders</button>
+  </div>
 </div>
 
-<div id="fullcalendar-root"></div>
+<div id="calendarLoadStatus" class="calendar-load-status" role="status" aria-live="polite" hidden></div>
+<div id="calendarLoadError" class="calendar-load-error" role="alert" hidden>
+  <span>Calendar items could not be loaded.</span>
+  <button type="button" class="btn btn-outline-primary btn-sm" id="calendarRetry">Retry</button>
+</div>
+<div id="fullcalendar-root" data-time-zone="{{ calendar_timezone }}" data-events-url="{% url 'web:calendar_events_json' %}"></div>
+<p class="calendar-timezone">Times shown in {{ calendar_timezone }}. Sent reminders and completed tasks remain visible as history.</p>
+<noscript><p class="alert alert-info">Enable JavaScript to use the calendar, or <a href="{% url 'web:upcoming' %}">view Upcoming</a>.</p></noscript>
 
-<div class="modal fade" id="eventDetailModal" tabindex="-1" aria-hidden="true">
+<div class="modal fade" id="eventDetailModal" tabindex="-1" aria-labelledby="eventDetailTitle" aria-hidden="true">
   <div class="modal-dialog modal-dialog-centered">
     <div class="modal-content">
       <div class="modal-header">
-        <h5 class="modal-title" id="eventDetailTitle">Event</h5>
+        <h2 class="modal-title h5" id="eventDetailTitle">Event</h2>
         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
       <div class="modal-body">
         <div class="kv">
-          <div class="kv-row"><div class="kv-key">Type</div><div class="kv-val" id="eventDetailType"></div></div>
-          <div class="kv-row"><div class="kv-key">When</div><div class="kv-val" id="eventDetailWhen"></div></div>
-          <div class="kv-row"><div class="kv-key">Status</div><div class="kv-val" id="eventDetailStatus"></div></div>
-          <div class="kv-row"><div class="kv-key">Assignee</div><div class="kv-val" id="eventDetailAssignee"></div></div>
-          <div class="kv-row"><div class="kv-key">Location</div><div class="kv-val" id="eventDetailLocation"></div></div>
+          <div class="kv-row detail-row"><div class="kv-key">Type</div><div class="kv-val" id="eventDetailType"></div></div>
+          <div class="kv-row detail-row"><div class="kv-key">When</div><div class="kv-val" id="eventDetailWhen"></div></div>
+          <div class="kv-row detail-row"><div class="kv-key">Status</div><div class="kv-val" id="eventDetailStatus"></div></div>
+          <div class="kv-row detail-row"><div class="kv-key">Repeats</div><div class="kv-val" id="eventDetailRecurrence"></div></div>
+          <div class="kv-row detail-row"><div class="kv-key">Assignee</div><div class="kv-val" id="eventDetailAssignee"></div></div>
+          <div class="kv-row detail-row"><div class="kv-key">Location</div><div class="kv-val" id="eventDetailLocation"></div></div>
         </div>
       </div>
       <div class="modal-footer">
+        <a href="#" id="eventDetailItemLink" class="btn btn-outline-primary btn-sm d-none">Open task</a>
         <a href="#" id="eventDetailGoogleLink" target="_blank" rel="noopener"
            class="btn btn-outline-primary btn-sm d-none">
-          <i class="bi bi-box-arrow-up-right"></i> Google Calendar
+          <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> Google Calendar <span class="visually-hidden">(opens in a new tab)</span>
         </a>
         <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Close</button>
       </div>
@@ -52,65 +74,5 @@
 {% endblock %}
 
 {% block extra_scripts %}
-<script>
-document.addEventListener("DOMContentLoaded", function () {
-  var calendarEl = document.getElementById("fullcalendar-root");
-  var modalEl = document.getElementById("eventDetailModal");
-  var modal = new bootstrap.Modal(modalEl);
-
-  // Phones get the list view by default — a month grid is unreadable at 375px.
-  var isSmall = window.matchMedia("(max-width: 575.98px)").matches;
-
-  var calendar = new FullCalendar.Calendar(calendarEl, {
-    timeZone: "Europe/London",
-    headerToolbar: {
-      left: "prev,next today",
-      center: "title",
-      right: isSmall ? "listMonth,dayGridMonth" : "dayGridMonth,timeGridWeek,listMonth",
-    },
-    buttonText: { today: "Today", month: "Month", week: "Week", list: "List" },
-    initialView: isSmall ? "listMonth" : "dayGridMonth",
-    firstDay: 1,
-    height: "auto",
-    dayMaxEventRows: isSmall ? 2 : 4,
-    noEventsText: "Nothing scheduled this month.",
-    events: "{% url 'web:calendar_events_json' %}",
-    eventClick: function (info) {
-      info.jsEvent.preventDefault();
-      var props = info.event.extendedProps;
-      document.getElementById("eventDetailTitle").textContent = info.event.title;
-      document.getElementById("eventDetailType").textContent = props.type || "—";
-      document.getElementById("eventDetailStatus").textContent = props.status || "—";
-      document.getElementById("eventDetailAssignee").textContent = props.assignee || "—";
-      document.getElementById("eventDetailLocation").textContent = props.location || "—";
-
-      var whenText = info.event.allDay
-        ? info.event.start.toLocaleDateString("en-GB", { weekday: "short", day: "2-digit", month: "short", year: "numeric" }) + " (all day)"
-        : info.event.start.toLocaleString("en-GB", { weekday: "short", day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
-      document.getElementById("eventDetailWhen").textContent = whenText;
-
-      var googleLink = document.getElementById("eventDetailGoogleLink");
-      if (props.googleUrl) {
-        googleLink.href = props.googleUrl;
-        googleLink.classList.remove("d-none");
-      } else {
-        googleLink.classList.add("d-none");
-      }
-      modal.show();
-    },
-  });
-
-  calendar.render();
-
-  // Keep the layout sensible if the device is rotated.
-  var lastSmall = isSmall;
-  window.addEventListener("resize", function () {
-    var nowSmall = window.matchMedia("(max-width: 575.98px)").matches;
-    if (nowSmall !== lastSmall) {
-      lastSmall = nowSmall;
-      calendar.changeView(nowSmall ? "listMonth" : "dayGridMonth");
-    }
-  });
-});
-</script>
+<script src="{% static 'js/calendar.js' %}"></script>
 {% endblock %}

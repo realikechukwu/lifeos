@@ -26,7 +26,7 @@ from assistant.services.tasks import cancel_task, complete_task
 from core.models import AssignedTo, AuditLog, Note, ParsedAction, Task
 
 from .forms import NoteForm, ParsedActionReviewForm, TaskForm
-from .services import build_calendar_feed, build_upcoming_feed, parse_date_param
+from .services import build_calendar_feed, build_upcoming_feed, build_upcoming_sections, parse_date_param
 
 
 def staff_required(view_func):
@@ -182,7 +182,11 @@ def health(request):
 @login_required
 def upcoming(request):
     items = build_upcoming_feed(request.user)
-    return render(request, "web/upcoming.html", {"items": items})
+    return render(request, "web/upcoming.html", {
+        "items": items,
+        "attention_items": [item for item in items if item.is_attention],
+        "upcoming_sections": build_upcoming_sections(items),
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -191,7 +195,7 @@ def upcoming(request):
 
 @login_required
 def calendar_page(request):
-    return render(request, "web/calendar.html")
+    return render(request, "web/calendar.html", {"calendar_timezone": timezone.get_current_timezone_name()})
 
 
 @login_required

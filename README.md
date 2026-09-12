@@ -200,14 +200,19 @@ Django templates, Bootstrap, and FullCalendar (no separate frontend
 framework, no new Django app). Every page requires login; the default
 landing page is **Upcoming**.
 
-- **Upcoming** (`/`) — chronological feed combining Google Calendar events
-  and task due dates in the next 30 days, overdue tasks (near the top),
-  pending reminders, and pending-review actions.
+- **Upcoming** (`/`) — dated agenda for the next 30 days, with an always-visible
+  Today section and expandable event details. Overdue tasks, overdue pending
+  reminders, and pending reviews appear in a separate Needs attention section.
 - **Calendar** (`/calendar/`) — FullCalendar month/week/list views, fed by
   the authenticated JSON endpoint at `/calendar/events.json`. Distinguishes
   calendar events, Ike work shifts, task due dates, and reminders by colour; clicking an
   event opens a details modal with a link into Google Calendar where one
   can be safely constructed.
+  Type filters narrow the schedule without reloading the page. List view highlights
+  today and opens at today's entries (or the next scheduled day); Jump to today
+  remains available within the current month. The Today strip stays available on
+  empty days. Calendar and details use the app timezone and 24-hour times; sent
+  reminders and completed tasks retain their status as history.
 
 ### Patchwork work-shift sync
 
@@ -266,6 +271,12 @@ original Phase 1 liveness check, kept for backwards compatibility.
 
 ```bash
 python manage.py test
+```
+
+Calendar controller interaction checks (Node.js built-in test runner):
+
+```bash
+node --test web/tests/calendar_ui.test.cjs
 ```
 
 All Gmail, Calendar, and OpenAI calls are mocked; tests never hit the network

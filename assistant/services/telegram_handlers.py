@@ -1041,11 +1041,8 @@ def _handle_command(
     if command in ("/start", "/help"):
         bot.send_message(
             chat.chat_id,
-            "Hello — I’m LifeOS. Send a short voice note or text telling me naturally what you want "
-            "to remember, schedule, or get done. For example: “Remind both of us on Friday at 6pm "
-            "to renew the insurance.” "
-            "I’ll ask if anything is unclear and show you a confirmation before acting.\n\n"
-            "<b>View & manage</b> is at the top of the menu; <b>➕ Add something new</b> is at the bottom.",
+            "Hi, I’m LifeOS. Send a voice note or text. I’ll clarify anything unclear and ask for "
+            "confirmation before making changes.",
             reply_markup=main_menu(),
         )
         return True

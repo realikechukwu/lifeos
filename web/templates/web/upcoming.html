@@ -2,84 +2,58 @@
 {% block title %}Upcoming — Family Assistant{% endblock %}
 
 {% block content %}
-<div class="page-head">
+<div class="page-head upcoming-head">
   <div>
     <h1 class="page-title">Upcoming</h1>
-    <p class="page-sub">
-      The next 30 days of events and due dates, anything overdue, pending reminders,
-      and items waiting for review — most urgent first.
-    </p>
+    <p class="page-sub">What needs attention today, followed by the next 30 days.</p>
   </div>
 </div>
 
-<div class="chip-row">
-  <a href="{% url 'web:calendar' %}" class="chip-link"><i class="bi bi-calendar3"></i> Calendar</a>
-  <a href="{% url 'web:task_list' %}?overdue=1" class="chip-link"><i class="bi bi-exclamation-triangle"></i> Overdue tasks</a>
-  <a href="{% url 'web:task_create' %}" class="chip-link"><i class="bi bi-plus-lg"></i> New task</a>
-  <a href="{% url 'web:note_create' %}" class="chip-link"><i class="bi bi-pencil"></i> New note</a>
-  {% if pending_review_count %}
-    <a href="{% url 'web:review_list' %}" class="chip-link"><i class="bi bi-inbox"></i> Review ({{ pending_review_count }})</a>
-  {% endif %}
+<div class="chip-row" aria-label="Upcoming shortcuts">
+  <a href="#today" class="chip-link"><i class="bi bi-crosshair" aria-hidden="true"></i> Today</a>
+  <a href="{% url 'web:task_create' %}" class="chip-link d-none d-md-inline-flex"><i class="bi bi-plus-lg" aria-hidden="true"></i> New task</a>
+  <a href="{% url 'web:note_create' %}" class="chip-link"><i class="bi bi-pencil" aria-hidden="true"></i> New note</a>
 </div>
 
-{% if not items %}
-  <div class="empty">
-    <div class="empty-icon"><i class="bi bi-check2-circle"></i></div>
-    <div class="empty-title">You're all clear</div>
-    <p class="empty-text">Nothing is due, scheduled, or waiting on you right now.</p>
-    <a href="{% url 'web:task_create' %}" class="btn btn-primary btn-sm">
-      <i class="bi bi-plus-lg"></i> Add a task
-    </a>
-  </div>
-{% else %}
-  <div class="stack">
-    {% for item in items %}
-      <div class="tile {% if item.is_overdue %}accent-danger{% elif item.kind == 'calendar_event' %}accent-info{% elif item.kind == 'work_shift' %}accent-brand{% elif item.kind == 'reminder' %}accent-ok{% elif item.kind == 'review' %}accent-brand{% else %}accent-warn{% endif %}">
-        <div class="tile-row">
-          <span class="feed-icon kind-{{ item.kind }}" aria-hidden="true">
-            {% if item.kind == 'calendar_event' %}<i class="bi bi-calendar-event"></i>
-            {% elif item.kind == 'work_shift' %}<i class="bi bi-briefcase"></i>
-            {% elif item.kind == 'reminder' %}<i class="bi bi-bell"></i>
-            {% elif item.kind == 'review' %}<i class="bi bi-inbox"></i>
-            {% elif item.kind == 'task_overdue' %}<i class="bi bi-exclamation-triangle"></i>
-            {% else %}<i class="bi bi-check2-square"></i>{% endif %}
-          </span>
-
-          <div class="tile-main">
-            <div class="d-flex align-items-start justify-content-between gap-2">
-              <p class="tile-title">{{ item.title }}</p>
-              <span class="chip {% if item.is_overdue %}chip-danger{% elif item.kind == 'review' %}chip-brand{% endif %}">
-                {% if item.is_overdue %}Overdue{% else %}{{ item.status }}{% endif %}
-              </span>
-            </div>
-
-            <div class="tile-meta">
-              <span>{{ item.kind_label }}</span>
-              {% if item.when_label %}<span class="sep">{{ item.when_label }}</span>{% endif %}
-              {% if item.assignee %}<span class="sep"><i class="bi bi-person"></i> {{ item.assignee }}</span>{% endif %}
-              {% if item.location %}<span class="sep"><i class="bi bi-geo-alt"></i> {{ item.location }}</span>{% endif %}
-            </div>
-
-            {% if item.detail_url or item.extra_links %}
-              <div class="tile-actions">
-                {% if item.detail_url %}
-                  <a href="{{ item.detail_url }}" class="btn btn-sm btn-outline-primary">View</a>
-                {% endif %}
-                {% for label, url in item.extra_links %}
-                  <a href="{{ url }}" target="_blank" rel="noopener" class="btn btn-sm btn-outline-secondary">
-                    <i class="bi bi-box-arrow-up-right"></i> {{ label }}
-                  </a>
-                {% endfor %}
-              </div>
-            {% endif %}
-          </div>
-        </div>
-      </div>
-    {% endfor %}
-  </div>
+{% if attention_items %}
+  <details class="upcoming-attention">
+    <summary class="upcoming-attention-summary">
+      <span><i class="bi bi-exclamation-circle-fill" aria-hidden="true"></i> Needs attention</span>
+      <span class="chip chip-danger">{{ attention_items|length }}</span>
+    </summary>
+    <div class="upcoming-attention-list" role="list">
+      {% for item in attention_items %}
+        {% include "web/_upcoming_item.html" with item=item %}
+      {% endfor %}
+    </div>
+  </details>
 {% endif %}
+
+<div class="upcoming-agenda" aria-label="Upcoming agenda">
+  {% for section in upcoming_sections %}
+    <section class="upcoming-section{% if section.is_today %} is-today{% endif %}" id="{% if section.is_today %}today{% else %}date-{{ section.date|date:'Y-m-d' }}{% endif %}" aria-labelledby="upcoming-section-{{ forloop.counter }}">
+      <h2 class="section-label upcoming-date-label" id="upcoming-section-{{ forloop.counter }}">
+        <span>{{ section.label }}</span>
+        {% if section.is_today or section.label == 'Tomorrow' %}<time datetime="{{ section.date|date:'Y-m-d' }}">{{ section.date|date:"j M" }}</time>{% endif %}
+        {% if section.items %}<span class="upcoming-count">{{ section.items|length }} <span class="visually-hidden">item{{ section.items|length|pluralize }}</span></span>{% endif %}
+      </h2>
+      {% if section.items %}
+        <div class="upcoming-section-list" role="list">
+          {% for item in section.items %}
+            {% include "web/_upcoming_item.html" with item=item %}
+          {% endfor %}
+        </div>
+      {% else %}
+        <div class="upcoming-today-empty">
+          <i class="bi bi-check2-circle" aria-hidden="true"></i>
+          <span>Nothing scheduled for today.</span>
+        </div>
+      {% endif %}
+    </section>
+  {% endfor %}
+</div>
 {% endblock %}
 
 {% block fab %}
-<a href="{% url 'web:task_create' %}" class="fab" aria-label="New task"><i class="bi bi-plus-lg"></i></a>
+<a href="{% url 'web:task_create' %}" class="fab" aria-label="New task"><i class="bi bi-plus-lg" aria-hidden="true"></i></a>
 {% endblock %}

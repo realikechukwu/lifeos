@@ -83,19 +83,19 @@
     </div>
 
     <nav class="desktop-nav" aria-label="Primary">
-      <a href="{% url 'web:upcoming' %}" class="desktop-nav-item {% if request.resolver_match.url_name == 'upcoming' %}active{% endif %}">
+      <a href="{% url 'web:upcoming' %}" class="desktop-nav-item {% if request.resolver_match.url_name == 'upcoming' %}active{% endif %}" {% if request.resolver_match.url_name == 'upcoming' %}aria-current="page"{% endif %}>
         <i class="bi bi-lightning-charge-fill"></i> Upcoming
       </a>
-      <a href="{% url 'web:calendar' %}" class="desktop-nav-item {% if request.resolver_match.url_name == 'calendar' %}active{% endif %}">
+      <a href="{% url 'web:calendar' %}" class="desktop-nav-item {% if request.resolver_match.url_name == 'calendar' %}active{% endif %}" {% if request.resolver_match.url_name == 'calendar' %}aria-current="page"{% endif %}>
         <i class="bi bi-calendar3"></i> Calendar
       </a>
-      <a href="{% url 'web:task_list' %}" class="desktop-nav-item {% if 'task' in request.resolver_match.url_name %}active{% endif %}">
+      <a href="{% url 'web:task_list' %}" class="desktop-nav-item {% if 'task' in request.resolver_match.url_name %}active{% endif %}" {% if 'task' in request.resolver_match.url_name %}aria-current="page"{% endif %}>
         <i class="bi bi-check2-square"></i> Tasks
       </a>
-      <a href="{% url 'web:note_list' %}" class="desktop-nav-item {% if 'note' in request.resolver_match.url_name %}active{% endif %}">
+      <a href="{% url 'web:note_list' %}" class="desktop-nav-item {% if 'note' in request.resolver_match.url_name %}active{% endif %}" {% if 'note' in request.resolver_match.url_name %}aria-current="page"{% endif %}>
         <i class="bi bi-journal-text"></i> Notes
       </a>
-      <a href="{% url 'web:review_list' %}" class="desktop-nav-item {% if 'review' in request.resolver_match.url_name %}active{% endif %}">
+      <a href="{% url 'web:review_list' %}" class="desktop-nav-item {% if 'review' in request.resolver_match.url_name %}active{% endif %}" {% if 'review' in request.resolver_match.url_name %}aria-current="page"{% endif %}>
         <i class="bi bi-inbox-fill"></i> Review
         {% if pending_review_count %}<span class="nav-count">{{ pending_review_count }}</span>{% endif %}
       </a>
@@ -122,23 +122,23 @@
 
 {% if user.is_authenticated %}
 <nav class="bottom-nav" aria-label="Primary">
-  <a href="{% url 'web:upcoming' %}" class="bottom-nav-item {% if request.resolver_match.url_name == 'upcoming' %}active{% endif %}">
+  <a href="{% url 'web:upcoming' %}" class="bottom-nav-item {% if request.resolver_match.url_name == 'upcoming' %}active{% endif %}" {% if request.resolver_match.url_name == 'upcoming' %}aria-current="page"{% endif %}>
     <i class="bi bi-lightning-charge-fill"></i>
     <span>Upcoming</span>
   </a>
-  <a href="{% url 'web:calendar' %}" class="bottom-nav-item {% if request.resolver_match.url_name == 'calendar' %}active{% endif %}">
+  <a href="{% url 'web:calendar' %}" class="bottom-nav-item {% if request.resolver_match.url_name == 'calendar' %}active{% endif %}" {% if request.resolver_match.url_name == 'calendar' %}aria-current="page"{% endif %}>
     <i class="bi bi-calendar3"></i>
     <span>Calendar</span>
   </a>
-  <a href="{% url 'web:task_list' %}" class="bottom-nav-item {% if 'task' in request.resolver_match.url_name %}active{% endif %}">
+  <a href="{% url 'web:task_list' %}" class="bottom-nav-item {% if 'task' in request.resolver_match.url_name %}active{% endif %}" {% if 'task' in request.resolver_match.url_name %}aria-current="page"{% endif %}>
     <i class="bi bi-check2-square"></i>
     <span>Tasks</span>
   </a>
-  <a href="{% url 'web:note_list' %}" class="bottom-nav-item {% if 'note' in request.resolver_match.url_name %}active{% endif %}">
+  <a href="{% url 'web:note_list' %}" class="bottom-nav-item {% if 'note' in request.resolver_match.url_name %}active{% endif %}" {% if 'note' in request.resolver_match.url_name %}aria-current="page"{% endif %}>
     <i class="bi bi-journal-text"></i>
     <span>Notes</span>
   </a>
-  <a href="{% url 'web:review_list' %}" class="bottom-nav-item {% if 'review' in request.resolver_match.url_name %}active{% endif %}">
+  <a href="{% url 'web:review_list' %}" class="bottom-nav-item {% if 'review' in request.resolver_match.url_name %}active{% endif %}" {% if 'review' in request.resolver_match.url_name %}aria-current="page"{% endif %}>
     <span class="bottom-nav-icon-wrap">
       <i class="bi bi-inbox-fill"></i>
       {% if pending_review_count %}<span class="bottom-nav-badge">{{ pending_review_count }}</span>{% endif %}

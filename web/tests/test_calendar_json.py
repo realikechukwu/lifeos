@@ -1,10 +1,11 @@
 """The calendar JSON endpoint combines calendar events, task due dates, and
 reminders into FullCalendar-compatible events, distinguished by type."""
 
-from datetime import timedelta
+from datetime import datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
@@ -58,3 +59,56 @@ class CalendarJsonTests(TestCase):
         far_future = (timezone.localdate() + timedelta(days=400)).isoformat()
         response = self.client.get(reverse("web:calendar_events_json"), {"start": far_future})
         self.assertEqual(response.json(), [])
+
+    def test_overnight_event_end_is_the_following_date(self):
+        event = CalendarEventRecord.objects.get(google_event_id="evt-1")
+        event.all_day = False
+        event.start_time = time(22)
+        event.end_time = time(6)
+        event.save()
+        events = self.client.get(reverse("web:calendar_events_json")).json()
+        result = next(item for item in events if item["id"] == f"calendar-{event.id}")
+        self.assertEqual(result["end"], f"{event.appointment_date + timedelta(days=1)}T06:00:00")
+        next_day = event.appointment_date + timedelta(days=1)
+        overlap = self.client.get(reverse("web:calendar_events_json"), {
+            "start": next_day.isoformat(), "end": (next_day + timedelta(days=1)).isoformat(),
+        }).json()
+        self.assertIn(f"calendar-{event.id}", [item["id"] for item in overlap])
+        # An event finishing exactly at the range start does not overlap it.
+        event.end_time = time.min
+        event.save()
+        midnight = self.client.get(reverse("web:calendar_events_json"), {
+            "start": next_day.isoformat(), "end": (next_day + timedelta(days=1)).isoformat(),
+        }).json()
+        self.assertNotIn(f"calendar-{event.id}", [item["id"] for item in midnight])
+
+    @override_settings(TIME_ZONE="Europe/London")
+    def test_shift_overlapping_range_is_included_and_formatted_in_london(self):
+        shift = PatchworkShift.objects.get(source_uid="patchwork-shift-1")
+        shift.starts_at = datetime(2026, 9, 30, 22, tzinfo=ZoneInfo("UTC"))
+        shift.ends_at = datetime(2026, 10, 1, 7, tzinfo=ZoneInfo("UTC"))
+        shift.timezone = "UTC"
+        shift.save()
+        events = self.client.get(reverse("web:calendar_events_json"), {
+            "start": "2026-10-01", "end": "2026-10-02",
+        }).json()
+        result = next(item for item in events if item["id"] == f"patchwork-{shift.id}")
+        self.assertEqual(result["start"], "2026-09-30T23:00:00+01:00")
+        self.assertEqual(result["end"], "2026-10-01T08:00:00+01:00")
+
+    def test_shift_without_end_is_still_included(self):
+        shift = PatchworkShift.objects.get(source_uid="patchwork-shift-1")
+        shift.ends_at = None
+        shift.save()
+        events = self.client.get(reverse("web:calendar_events_json"), {
+            "start": timezone.localdate().isoformat(),
+        }).json()
+        self.assertIn(f"patchwork-{shift.id}", [item["id"] for item in events])
+
+    def test_filters_and_task_navigation_have_stable_metadata(self):
+        events = self.client.get(reverse("web:calendar_events_json")).json()
+        self.assertEqual({item["extendedProps"]["category"] for item in events}, {
+            "event", "work", "task", "reminder",
+        })
+        task = next(item for item in events if item["extendedProps"]["category"] == "task")
+        self.assertIn("?highlight=", task["extendedProps"]["detailUrl"])

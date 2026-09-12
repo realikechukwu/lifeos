@@ -1,0 +1,52 @@
+<article class="tile upcoming-item {% if item.is_overdue %}accent-danger{% elif item.kind == 'calendar_event' %}accent-info{% elif item.kind == 'work_shift' %}accent-brand{% elif item.kind == 'reminder' %}accent-ok{% elif item.kind == 'review' %}accent-brand{% else %}accent-warn{% endif %}" role="listitem">
+  <div class="tile-row">
+    <span class="feed-icon kind-{{ item.kind }}" aria-hidden="true">
+      {% if item.kind == 'calendar_event' %}<i class="bi bi-calendar-event"></i>
+      {% elif item.kind == 'work_shift' %}<i class="bi bi-briefcase"></i>
+      {% elif item.kind == 'reminder' %}<i class="bi bi-bell"></i>
+      {% elif item.kind == 'review' %}<i class="bi bi-inbox"></i>
+      {% elif item.kind == 'task_overdue' %}<i class="bi bi-exclamation-triangle"></i>
+      {% else %}<i class="bi bi-check2-square"></i>{% endif %}
+    </span>
+    <div class="tile-main">
+      <div class="upcoming-item-head">
+        <div>
+          <div class="upcoming-item-kicker">{{ item.kind_label }}</div>
+          <h3 class="tile-title">{{ item.title }}</h3>
+        </div>
+        {% if item.is_overdue %}
+          <span class="chip chip-danger">Overdue</span>
+        {% elif item.kind == 'review' %}
+          <span class="chip chip-brand">Review</span>
+        {% endif %}
+      </div>
+      <div class="tile-meta upcoming-item-meta">
+        {% if item.display_when %}<strong>{{ item.display_when }}</strong>{% endif %}
+        {% if item.assignee %}<span><i class="bi bi-person" aria-hidden="true"></i> {{ item.assignee }}</span>{% endif %}
+      </div>
+      {% if item.location %}<p class="upcoming-location"><i class="bi bi-geo-alt" aria-hidden="true"></i> {{ item.location|truncatechars:65 }}</p>{% endif %}
+      {% if item.kind == 'calendar_event' or item.kind == 'work_shift' %}
+          <details class="upcoming-item-details">
+            <summary>Details <span class="visually-hidden">for {{ item.title }}</span></summary>
+            <div class="upcoming-item-details-body">
+              <p>{{ item.details_when|default:item.when_label }}</p>
+              {% if item.location %}<p><i class="bi bi-geo-alt" aria-hidden="true"></i> {{ item.location }}</p>{% endif %}
+              {% for label, url in item.extra_links %}
+                <a href="{{ url }}" target="_blank" rel="noopener" class="btn btn-sm btn-outline-secondary">
+                  <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> {{ label }} <span class="visually-hidden">(opens in a new tab)</span>
+                </a>
+              {% endfor %}
+            </div>
+          </details>
+      {% elif item.detail_url %}
+        <div class="upcoming-item-action">
+          <a href="{{ item.detail_url }}" class="upcoming-primary-link">
+            {% if item.kind == 'review' %}Review item{% else %}Open task{% endif %}
+            <span class="visually-hidden">: {{ item.title }}</span>
+            <i class="bi bi-chevron-right" aria-hidden="true"></i>
+          </a>
+        </div>
+      {% endif %}
+    </div>
+  </div>
+</article>
