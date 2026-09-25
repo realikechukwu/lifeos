@@ -56,12 +56,9 @@ def check_for_duplicate(parsed_action: ParsedAction, calendar_id: str):
     """Deterministic duplicate check, in the required order. Returns
     ("duplicate" | "reschedule" | "none", CalendarEventRecord | None)."""
 
-    # 1. Same source Gmail message id already produced an event.
-    existing = CalendarEventRecord.objects.filter(incoming_email=parsed_action.incoming_email).first()
-    if existing:
-        return "duplicate", existing
-
-    # 2. Same non-empty booking reference.
+    # 1. Same non-empty booking reference. Do not treat the source message by
+    # itself as a duplicate: one authorised message may legitimately request
+    # several distinct calendar events.
     booking_ref = (parsed_action.booking_reference or "").strip()
     if booking_ref:
         candidate = (
@@ -78,7 +75,8 @@ def check_for_duplicate(parsed_action: ParsedAction, calendar_id: str):
                 return "duplicate", candidate
             return "reschedule", candidate
 
-    # 3. Deterministic duplicate key.
+    # 2. Deterministic duplicate key. This still makes retries idempotent,
+    # including retries of one item from a multi-action message.
     key = compute_duplicate_key(
         parsed_action.title,
         parsed_action.appointment_date,
@@ -152,9 +150,6 @@ def passes_auto_create_gate(parsed_action: ParsedAction) -> tuple[bool, list[str
     if appt_date and parsed_action.start_time and parsed_action.end_time:
         if not times_are_valid(appt_date, parsed_action.start_time, parsed_action.end_time):
             reasons.append("End time is not after start time.")
-
-    if parsed_action.confidence < settings.AUTOMATIC_ACTION_CONFIDENCE_THRESHOLD:
-        reasons.append("Confidence is below the automatic action threshold.")
 
     calendar_id = settings.GOOGLE_CALENDAR_ID
     if not reasons and appt_date is not None:

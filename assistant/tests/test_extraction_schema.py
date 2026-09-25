@@ -4,7 +4,12 @@ from pathlib import Path
 from django.test import SimpleTestCase
 from pydantic import ValidationError
 
-from assistant.services.extractor import AssistantAction, build_messages
+from assistant.services.extractor import (
+    AssistantAction,
+    AssistantActionBatch,
+    build_messages,
+    normalise_action_inferences,
+)
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -105,6 +110,29 @@ class AssistantActionSchemaTests(SimpleTestCase):
         self.assertEqual(extraction.recurrence_days_of_week, ["MO", "WE"])
         self.assertEqual(extraction.recurrence_until, "2026-12-15")
 
+    def test_batch_accepts_multiple_actions_but_is_bounded(self):
+        action = AssistantAction(action_type="create_task", title="Buy milk", confidence=0.9)
+        self.assertEqual(len(AssistantActionBatch(actions=[action, action]).actions), 2)
+        with self.assertRaises(ValidationError):
+            AssistantActionBatch(actions=[])
+        with self.assertRaises(ValidationError):
+            AssistantActionBatch(actions=[action] * 11)
+
+    def test_weekly_recurrence_gets_a_future_anchor_and_default_time(self):
+        action = AssistantAction(
+            action_type="create_calendar_event",
+            title="Swimming",
+            recurrence_frequency="weekly",
+            recurrence_days_of_week=["TU"],
+            confidence=0.8,
+            missing_fields=["appointment_date", "start_time"],
+        )
+        normalised = normalise_action_inferences(action, date(2026, 9, 21))
+        self.assertEqual(normalised.appointment_date, "2026-09-22")
+        self.assertEqual(normalised.start_time, "09:00")
+        self.assertNotIn("appointment_date", normalised.missing_fields)
+        self.assertNotIn("start_time", normalised.missing_fields)
+
 
 class PromptInjectionRemainsUntrustedTests(SimpleTestCase):
     def test_injection_text_is_wrapped_as_data_only(self):
@@ -134,3 +162,5 @@ class PromptInjectionRemainsUntrustedTests(SimpleTestCase):
         # delimited block (i.e. it cannot smuggle itself into the system
         # prompt or the surrounding instructions).
         self.assertNotIn("rm -rf", system_message)
+        self.assertNotIn("exactly one", system_message.lower())
+        self.assertIn("every distinct requested action", system_message.lower())

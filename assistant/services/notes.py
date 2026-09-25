@@ -1,7 +1,6 @@
 """Note creation. Single source of truth for both the automatic email
 pipeline and the Django admin approval action."""
 
-from django.conf import settings
 from django.utils import timezone
 
 from core.models import AuditLog, HouseholdMember, Note, ParsedAction
@@ -43,15 +42,6 @@ def passes_note_auto_create_gate(parsed_action: ParsedAction) -> tuple[bool, lis
     has_title = bool((parsed_action.title or "").strip())
     if not has_body and not has_title:
         reasons.append("Note has neither a body nor a title.")
-
-    if parsed_action.confidence < settings.AUTOMATIC_ACTION_CONFIDENCE_THRESHOLD:
-        reasons.append("Confidence is below the automatic action threshold.")
-
-    if parsed_action.missing_fields:
-        reasons.append("There are material missing fields.")
-
-    if parsed_action.ambiguity_notes:
-        reasons.append("There are ambiguity notes.")
 
     return (len(reasons) == 0, reasons)
 

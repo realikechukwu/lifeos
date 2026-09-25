@@ -196,6 +196,28 @@ def build_confirmation_body(outcome: str, parsed_action: ParsedAction | None = N
     )
 
 
+def build_batch_confirmation_body(results: list[dict]) -> str:
+    """Build one reply covering every independently handled request item."""
+    if len(results) == 1 and results[0].get("outcome") != "failed":
+        item = results[0]
+        return build_confirmation_body(
+            item["outcome"], item.get("parsed_action"), item.get("context")
+        )
+
+    lines = [f"I handled {len(results)} items from your message:"]
+    for index, item in enumerate(results, start=1):
+        parsed_action = item.get("parsed_action")
+        if item.get("outcome") == "failed":
+            title = (getattr(parsed_action, "title", "") or "this item").strip()
+            detail = f'I could not complete "{title}". It was recorded as failed; the other items were unaffected.'
+        else:
+            detail = build_confirmation_body(
+                item["outcome"], parsed_action, item.get("context")
+            )
+        lines.append(f"{index}. {detail}")
+    return "\n\n".join(lines)
+
+
 def _resolve_confirmation_cc(incoming_email: IncomingEmail, parsed_action: ParsedAction | None) -> str | None:
     """Only ever the *other* configured household address, and only when
     explicitly requested. `to_addr` (the outer sender) is never duplicated
@@ -220,6 +242,28 @@ def send_confirmation(
         thread_id=incoming_email.gmail_thread_id,
         to_addr=incoming_email.outer_sender,
         cc_addr=_resolve_confirmation_cc(incoming_email, parsed_action),
+        subject=incoming_email.subject or "Your email",
+        body_text=body,
+    )
+
+
+def send_batch_confirmation(
+    incoming_email: IncomingEmail,
+    results: list[dict],
+    gmail_service: GmailService | None = None,
+) -> str:
+    """Send exactly one reply for a batch; any explicit notify_both applies."""
+    body = build_batch_confirmation_body(results)
+    parsed_actions = [item.get("parsed_action") for item in results]
+    notify_action = next(
+        (action for action in parsed_actions if action is not None and action.notify_both),
+        None,
+    )
+    service = gmail_service or GmailService()
+    return service.send_reply(
+        thread_id=incoming_email.gmail_thread_id,
+        to_addr=incoming_email.outer_sender,
+        cc_addr=_resolve_confirmation_cc(incoming_email, notify_action),
         subject=incoming_email.subject or "Your email",
         body_text=body,
     )

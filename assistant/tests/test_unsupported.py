@@ -29,7 +29,7 @@ class UnsupportedActionTests(TestCase):
         self.assertEqual(Reminder.objects.count(), 0)
         self.assertEqual(CalendarEventRecord.objects.count(), 0)
         parsed_action.refresh_from_db()
-        self.assertEqual(parsed_action.status, ParsedAction.Status.PENDING_REVIEW)
+        self.assertEqual(parsed_action.status, ParsedAction.Status.REJECTED)
 
     def test_requires_review_action_executes_nothing(self):
         email = IncomingEmail.objects.create(

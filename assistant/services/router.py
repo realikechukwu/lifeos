@@ -1,7 +1,7 @@
-"""Routes one validated AssistantAction extraction to the correct side
-effect. Each email produces exactly one ParsedAction plus, at most, one
-primary object (calendar event / task / note / reminder) and, only for
-create_calendar_event, one linked reminder when explicitly requested.
+"""Routes one validated AssistantAction item to the correct side effect.
+An email may produce several ParsedAction rows; every item passes through this
+function independently. A calendar item may additionally create one linked
+reminder when explicitly requested.
 
 This is the single place that decides what an incoming email is allowed to
 do — the management commands and the admin actions both call into it rather
@@ -102,7 +102,9 @@ def build_parsed_action_from_extraction(incoming_email, extraction) -> ParsedAct
 
 
 def _defer_to_review(parsed_action: ParsedAction, reasons: list[str], *, unsupported: bool) -> tuple[str, dict]:
-    parsed_action.status = ParsedAction.Status.PENDING_REVIEW
+    parsed_action.status = (
+        ParsedAction.Status.REJECTED if unsupported else ParsedAction.Status.PENDING_REVIEW
+    )
     if reasons:
         parsed_action.ambiguity_notes = list(parsed_action.ambiguity_notes) + reasons
         parsed_action.save(update_fields=["status", "ambiguity_notes"])

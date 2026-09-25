@@ -5,8 +5,10 @@ A deliberately scoped Django app. Phase 1: forward an appointment email to
 the shared Google Calendar (with a confirmation reply) or parked in Django
 admin for manual review. Phase 2 adds direct email commands on top of the
 same pipeline: **tasks, notes, email reminders, and marking a task
-complete** — still one primary action per email (plus, optionally, one
-linked reminder when explicitly requested alongside a calendar event).
+complete**. One message may request several actions; LifeOS handles each
+independently and sends one numbered result email. A recurring request stays
+one recurring calendar series, and a calendar action may also include one
+linked reminder.
 Phase 3 adds a small authenticated **family web interface** (Upcoming,
 Calendar, Tasks, Notes, Review) on top of the same data, plus a production
 settings structure and Oracle deployment files — see
@@ -14,8 +16,9 @@ settings structure and Oracle deployment files — see
 
 Telegram is an optional two-way channel over the same action services. The
 two configured household users can talk to LifeOS privately or in one linked
-family group. The bot asks follow-up questions, shows a structured summary,
-and requires a button confirmation before executing an action. Leaving its
+family group. The bot makes reasonable contextual inferences, asks only for
+details that cannot be made technically valid, then shows and confirms each
+requested item separately. Leaving its
 settings empty preserves the original email-only behaviour.
 
 ## Project structure
@@ -31,8 +34,9 @@ deploy/                  systemd units, Nginx example config, Gunicorn config, u
 `assistant/services/`:
 
 - `extractor.py` — the single Pydantic schema (`AssistantAction`) covering
-  every action type, plus deterministic date/time parsing/validation.
-- `router.py` — the single place that decides, per email, which one
+  every action type, a bounded batch schema, and deterministic date/time
+  parsing/validation.
+- `router.py` — the single place that decides, per extracted item, which
   primary action (and optional linked reminder) gets executed automatically
   vs. deferred to `pending_review`.
 - `tasks.py`, `notes.py`, `reminders.py` — gate + creation/completion logic
@@ -91,10 +95,11 @@ python manage.py poll_gmail
 Safe to run repeatedly (e.g. via cron). Processes up to 25 unread, unlabelled
 messages per run, applies one of the four `LifeAssistant/*` Gmail labels, and
 never reprocesses an already-processed or pending message. Each authorised
-email is routed to exactly one action type — calendar event, task, note,
-email reminder, or mark-task-complete — plus, only for a calendar event, one
-linked reminder if explicitly requested ("...and remind both of us the day
-before").
+email may contain up to ten calendar events, tasks, notes, email reminders, or
+mark-task-complete requests. Items are routed independently, so one failure
+does not undo successful items, and the sender receives one numbered summary.
+A calendar item may also carry one linked reminder if explicitly requested
+("...and remind both of us the day before").
 
 ## Telegram conversations
 
@@ -112,7 +117,9 @@ configured webhook-secret header and the immutable sender id matches
 Each authorised user can `/start` the bot privately and send either text or a
 short voice note (up to 2 minutes and 5 MB). Voice is transcribed in the spoken
 language, acknowledged back to the user, and then follows the same clarification
-and explicit-confirmation flow as typed text. For example: “Remind both of us on
+and explicit-confirmation flow as typed text. Multi-item requests are queued and
+shown as “Item N of M”; Confirm, Edit, and Cancel apply only to the current item,
+then the bot advances to the next. For example: “Remind both of us on
 Friday at 6pm to renew the insurance.” Raw audio is deleted immediately after
 transcription and is never stored by LifeOS. For the shared group,
 Ike sends `/linkgroup` once inside it; only the configured owner id can enrol a

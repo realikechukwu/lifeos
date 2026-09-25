@@ -1,4 +1,5 @@
 import json
+from datetime import date
 from unittest.mock import Mock, patch
 
 from django.test import Client, TestCase, override_settings
@@ -167,33 +168,21 @@ class TelegramConversationTests(TestCase):
         self.assertEqual(TelegramConversation.objects.count(), 0)
 
     @patch("assistant.services.telegram_handlers.extract_telegram_action")
-    def test_missing_time_prompts_then_builds_confirmation(self, extract):
-        extract.side_effect = [
-            AssistantAction(
-                action_type="create_calendar_event",
-                title="Dentist",
-                appointment_date="2026-08-12",
-                confidence=0.95,
-                missing_fields=["start_time"],
-            ),
-            AssistantAction(
-                action_type="create_calendar_event",
-                title="Dentist",
-                appointment_date="2026-08-12",
-                start_time="09:00",
-                confidence=0.97,
-            ),
-        ]
+    def test_missing_event_time_defaults_to_nine_without_clarification(self, extract):
+        extract.return_value = AssistantAction(
+            action_type="create_calendar_event",
+            title="Dentist",
+            appointment_date="2026-08-12",
+            confidence=0.95,
+            missing_fields=["start_time"],
+        )
         process_telegram_update(message_update(20, text="Dentist next Wednesday"), bot=self.bot)
         conversation = TelegramConversation.objects.get()
-        self.assertEqual(conversation.status, TelegramConversation.Status.AWAITING_CLARIFICATION)
-        self.assertIn("What time", self.bot.messages[-1][1])
-
-        process_telegram_update(message_update(21, text="9am"), bot=self.bot)
-        conversation.refresh_from_db()
         self.assertEqual(conversation.status, TelegramConversation.Status.AWAITING_CONFIRMATION)
         self.assertIsNotNone(conversation.parsed_action)
+        self.assertEqual(conversation.parsed_action.start_time.strftime("%H:%M"), "09:00")
         self.assertEqual(conversation.parsed_action.incoming_email.source, IncomingEmail.Source.TELEGRAM)
+        self.assertIn("Item 1 of 1", self.bot.messages[-1][1])
         self.assertIn("Is this right?", self.bot.messages[-1][1])
 
     @patch("assistant.services.telegram_handlers.admin_approve_and_execute")
@@ -301,20 +290,20 @@ class TelegramConversationTests(TestCase):
         self.assertEqual(TelegramUpdate.objects.get(update_id=51).update_type, "unauthorised")
 
     @patch("assistant.services.telegram_handlers.extract_telegram_action")
-    @patch("assistant.services.telegram_handlers.transcribe_telegram_voice", return_value="9am")
+    @patch("assistant.services.telegram_handlers.transcribe_telegram_voice", return_value="2026-09-28")
     def test_voice_can_answer_an_active_clarification(self, transcribe, extract):
         extract.side_effect = [
             AssistantAction(
                 action_type="create_calendar_event",
                 title="Dentist",
-                appointment_date="2026-09-18",
+                start_time="09:00",
                 confidence=0.9,
-                missing_fields=["start_time"],
+                missing_fields=["appointment_date"],
             ),
             AssistantAction(
                 action_type="create_calendar_event",
                 title="Dentist",
-                appointment_date="2026-09-18",
+                appointment_date="2026-09-28",
                 start_time="09:00",
                 confidence=0.98,
             ),
@@ -324,8 +313,139 @@ class TelegramConversationTests(TestCase):
 
         conversation = TelegramConversation.objects.get()
         self.assertEqual(conversation.status, TelegramConversation.Status.AWAITING_CONFIRMATION)
-        self.assertEqual(conversation.transcript[-1], {"role": "user", "text": "9am"})
+        self.assertEqual(conversation.transcript[-1], {"role": "user", "text": "2026-09-28"})
         transcribe.assert_called_once()
+
+    @patch("assistant.services.telegram_handlers.extract_telegram_action")
+    def test_multi_item_request_confirms_and_executes_each_item_separately(self, extract):
+        extract.return_value = [
+            AssistantAction(
+                action_type="create_task", title="Buy milk", assigned_to="ike", confidence=0.9
+            ),
+            AssistantAction(
+                action_type="create_task", title="Book dentist", assigned_to="ike", confidence=0.9
+            ),
+        ]
+        process_telegram_update(
+            message_update(61, text="Add buy milk and book the dentist"), bot=self.bot
+        )
+        conversation = TelegramConversation.objects.get()
+        self.assertEqual(conversation.batch_size, 2)
+        self.assertEqual(conversation.batch_index, 0)
+        self.assertIn("Item 1 of 2", self.bot.messages[-1][1])
+
+        def confirm(update_id):
+            return {
+                "update_id": update_id,
+                "callback_query": {
+                    "id": f"callback-{update_id}",
+                    "from": {"id": 446464092, "is_bot": False, "first_name": "Ike"},
+                    "data": f"tg:confirm:{conversation.id}",
+                    "message": {
+                        "message_id": update_id + 100,
+                        "chat": {"id": 446464092, "type": "private"},
+                    },
+                },
+            }
+
+        process_telegram_update(confirm(62), bot=self.bot)
+        conversation.refresh_from_db()
+        self.assertEqual(conversation.status, TelegramConversation.Status.AWAITING_CONFIRMATION)
+        self.assertEqual(conversation.batch_index, 1)
+        self.assertEqual(list(Task.objects.values_list("title", flat=True)), ["Buy milk"])
+        self.assertIn("Item 2 of 2", self.bot.messages[-1][1])
+
+        process_telegram_update(confirm(63), bot=self.bot)
+        conversation.refresh_from_db()
+        self.assertEqual(conversation.status, TelegramConversation.Status.COMPLETED)
+        self.assertCountEqual(
+            Task.objects.values_list("title", flat=True), ["Buy milk", "Book dentist"]
+        )
+
+    @patch("assistant.services.telegram_handlers.extract_telegram_action")
+    def test_cancelling_one_batch_item_skips_only_that_item(self, extract):
+        extract.return_value = [
+            AssistantAction(action_type="create_task", title="Skip me", confidence=0.9),
+            AssistantAction(action_type="create_task", title="Keep me", confidence=0.9),
+        ]
+        process_telegram_update(message_update(65, text="Add two tasks"), bot=self.bot)
+        conversation = TelegramConversation.objects.get()
+        process_telegram_update(
+            {
+                "update_id": 66,
+                "callback_query": {
+                    "id": "callback-cancel-first",
+                    "from": {"id": 446464092, "is_bot": False, "first_name": "Ike"},
+                    "data": f"tg:cancel:{conversation.id}",
+                    "message": {
+                        "message_id": 166,
+                        "chat": {"id": 446464092, "type": "private"},
+                    },
+                },
+            },
+            bot=self.bot,
+        )
+        conversation.refresh_from_db()
+        self.assertEqual(conversation.status, TelegramConversation.Status.AWAITING_CONFIRMATION)
+        self.assertEqual(conversation.batch_index, 1)
+        self.assertIn("Item 2 of 2", self.bot.messages[-1][1])
+        self.assertFalse(Task.objects.exists())
+
+    @patch("assistant.services.telegram_handlers.extract_telegram_action")
+    def test_editing_one_batch_item_preserves_the_remaining_queue(self, extract):
+        extract.side_effect = [
+            [
+                AssistantAction(action_type="create_task", title="Milk", confidence=0.9),
+                AssistantAction(action_type="create_task", title="Dentist", confidence=0.9),
+            ],
+            AssistantAction(action_type="create_task", title="Oat milk", confidence=0.95),
+        ]
+        process_telegram_update(message_update(67, text="Add milk and dentist"), bot=self.bot)
+        conversation = TelegramConversation.objects.get()
+        process_telegram_update(
+            {
+                "update_id": 68,
+                "callback_query": {
+                    "id": "callback-edit-first",
+                    "from": {"id": 446464092, "is_bot": False, "first_name": "Ike"},
+                    "data": f"tg:edit:{conversation.id}",
+                    "message": {
+                        "message_id": 168,
+                        "chat": {"id": 446464092, "type": "private"},
+                    },
+                },
+            },
+            bot=self.bot,
+        )
+        process_telegram_update(message_update(69, text="Make that oat milk"), bot=self.bot)
+
+        conversation.refresh_from_db()
+        self.assertEqual(conversation.batch_index, 0)
+        self.assertEqual(conversation.draft_extraction["title"], "Oat milk")
+        self.assertEqual(conversation.pending_extractions[1]["title"], "Dentist")
+        self.assertIn("Item 1 of 2", self.bot.messages[-1][1])
+
+    @patch("assistant.services.telegram_handlers.timezone.localdate", return_value=date(2026, 9, 21))
+    @patch("assistant.services.telegram_handlers.extract_telegram_action")
+    def test_recurring_event_infers_first_occurrence_and_shows_recurrence(self, extract, _localdate):
+        extract.return_value = AssistantAction(
+            action_type="create_calendar_event",
+            title="Swimming",
+            start_time="18:00",
+            recurrence_frequency="weekly",
+            recurrence_days_of_week=["TU"],
+            confidence=0.85,
+        )
+
+        process_telegram_update(
+            message_update(64, text="Swimming every Tuesday at 6"), bot=self.bot
+        )
+
+        conversation = TelegramConversation.objects.get()
+        self.assertEqual(conversation.status, TelegramConversation.Status.AWAITING_CONFIRMATION)
+        self.assertEqual(conversation.parsed_action.appointment_date, date(2026, 9, 22))
+        self.assertIn("Item 1 of 1", self.bot.messages[-1][1])
+        self.assertIn("Repeats weekly on Tuesday", self.bot.messages[-1][1])
 
     @patch("assistant.services.telegram_handlers.transcribe_telegram_voice")
     def test_oversized_voice_notes_are_rejected_before_download(self, transcribe):

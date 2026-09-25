@@ -3,7 +3,6 @@ the automatic email pipeline and the Django admin actions — no business
 logic is duplicated between them.
 """
 
-from django.conf import settings
 from django.utils import timezone
 
 from core.models import AssignedTo, AuditLog, HouseholdMember, ParsedAction, Task
@@ -36,15 +35,6 @@ def passes_task_auto_create_gate(parsed_action: ParsedAction) -> tuple[bool, lis
 
     if parsed_action.assigned_to and parsed_action.assigned_to not in AssignedTo.values:
         reasons.append("Assignee is not one of the allowed values.")
-
-    if parsed_action.confidence < settings.AUTOMATIC_ACTION_CONFIDENCE_THRESHOLD:
-        reasons.append("Confidence is below the automatic action threshold.")
-
-    if parsed_action.missing_fields:
-        reasons.append("There are material missing fields.")
-
-    if parsed_action.ambiguity_notes:
-        reasons.append("There are ambiguity notes.")
 
     return (len(reasons) == 0, reasons)
 

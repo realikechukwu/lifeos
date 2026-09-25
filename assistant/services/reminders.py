@@ -65,12 +65,6 @@ def evaluate_reminder_fields(
     if recipient in RecipientTarget.values and not resolve_recipient_emails(recipient):
         reasons.append("No authorised email address is configured for the requested recipient.")
 
-    if has_ambiguity:
-        reasons.append("There are ambiguity notes.")
-
-    if confidence < settings.AUTOMATIC_ACTION_CONFIDENCE_THRESHOLD:
-        reasons.append("Confidence is below the automatic action threshold.")
-
     return (len(reasons) == 0, reasons)
 
 
@@ -86,9 +80,6 @@ def passes_reminder_auto_create_gate(parsed_action: ParsedAction) -> tuple[bool,
 
     if not (parsed_action.title or "").strip():
         reasons.append("Title is missing.")
-
-    if parsed_action.missing_fields:
-        reasons.append("There are material missing fields.")
 
     ok, field_reasons = evaluate_reminder_fields(
         parsed_action.reminder_date,

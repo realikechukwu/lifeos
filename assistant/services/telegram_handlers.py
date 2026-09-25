@@ -27,6 +27,13 @@ from core.models import (
 )
 
 from .router import admin_approve_and_execute, build_parsed_action_from_extraction
+from .extractor import (
+    AssistantAction,
+    build_recurrence,
+    normalise_action_inferences,
+    parse_24h_time,
+    parse_iso_date,
+)
 from .tasks import complete_task
 from .telegram import TelegramAPIError, TelegramBot, TelegramFileTooLargeError
 from .telegram_extractor import extract_telegram_action
@@ -212,10 +219,8 @@ def _material_question(extraction) -> tuple[str, list[tuple[str, str]]] | None:
     if action == ParsedAction.ActionType.CREATE_CALENDAR_EVENT:
         if not extraction.title:
             missing.append("title")
-        if not extraction.appointment_date:
+        if parse_iso_date(extraction.appointment_date) is None:
             missing.append("appointment_date")
-        if not extraction.all_day and not extraction.start_time:
-            missing.append("start_time")
     elif action == ParsedAction.ActionType.CREATE_TASK and not extraction.title:
         missing.append("title")
     elif action == ParsedAction.ActionType.CREATE_NOTE and not (
@@ -223,16 +228,16 @@ def _material_question(extraction) -> tuple[str, list[tuple[str, str]]] | None:
     ):
         missing.append("title_or_description")
     elif action == ParsedAction.ActionType.CREATE_EMAIL_REMINDER:
-        for field in required[action]:
-            if not getattr(extraction, field, None):
-                missing.append(field)
+        if not extraction.title:
+            missing.append("title")
+        if parse_iso_date(extraction.reminder_date) is None:
+            missing.append("reminder_date")
+        if parse_24h_time(extraction.reminder_time) is None:
+            missing.append("reminder_time")
+        if not extraction.reminder_recipient:
+            missing.append("reminder_recipient")
     elif action == ParsedAction.ActionType.MARK_TASK_COMPLETE and not extraction.task_search_text:
         missing.append("task_search_text")
-
-    material_names = set(required.get(action, [])) | {"start_time", "assigned_to", "due_date", "due_time"}
-    for field in extraction.missing_fields:
-        if field in material_names and field not in missing:
-            missing.append(field)
 
     field = missing[0] if missing else None
     questions = {
@@ -269,8 +274,8 @@ def _material_question(extraction) -> tuple[str, list[tuple[str, str]]] | None:
     if field:
         return questions.get(field, (f"Could you clarify {field.replace('_', ' ')}?", []))
 
-    if action == ParsedAction.ActionType.REQUIRES_REVIEW or extraction.ambiguity_notes:
-        detail = extraction.ambiguity_notes[0] if extraction.ambiguity_notes else "I could not determine the request."
+    if action == ParsedAction.ActionType.REQUIRES_REVIEW:
+        detail = extraction.ambiguity_notes[0] if extraction.ambiguity_notes else "I could not form a valid supported action."
         return (f"I need one detail before I can continue: {detail}", [])
     return None
 
@@ -282,7 +287,7 @@ def _question_keyboard(conversation_id: int, options: list[tuple[str, str]]) -> 
     return _keyboard(*rows)
 
 
-def _summary(extraction) -> str:
+def _summary(extraction, *, item_number: int = 1, total_items: int = 1) -> str:
     esc = lambda value: html.escape(str(value)) if value not in (None, "") else "—"
     labels = {
         ParsedAction.ActionType.CREATE_CALENDAR_EVENT: "📅 <b>Calendar event</b>",
@@ -291,7 +296,7 @@ def _summary(extraction) -> str:
         ParsedAction.ActionType.CREATE_EMAIL_REMINDER: "⏰ <b>Email reminder</b>",
         ParsedAction.ActionType.MARK_TASK_COMPLETE: "☑️ <b>Complete task</b>",
     }
-    lines = [labels.get(extraction.action_type, "<b>LifeOS action</b>")]
+    lines = [f"<b>Item {item_number} of {total_items}</b>", labels.get(extraction.action_type, "<b>LifeOS action</b>")]
     if extraction.action_type == ParsedAction.ActionType.CREATE_CALENDAR_EVENT:
         when = extraction.appointment_date
         if extraction.all_day:
@@ -303,6 +308,19 @@ def _summary(extraction) -> str:
         lines += [f"<b>{esc(extraction.title)}</b>", esc(when)]
         if extraction.location:
             lines.append(f"📍 {esc(extraction.location)}")
+        recurrence_start = parse_iso_date(extraction.appointment_date)
+        if extraction.recurrence_frequency and recurrence_start:
+            recurrence = build_recurrence(
+                extraction.recurrence_frequency,
+                extraction.recurrence_interval,
+                extraction.recurrence_days_of_week,
+                parse_iso_date(extraction.recurrence_until),
+                extraction.recurrence_count,
+                recurrence_start,
+                extraction.all_day,
+            )
+            if recurrence.description:
+                lines.append(f"🔁 {esc(recurrence.description)}")
     elif extraction.action_type == ParsedAction.ActionType.CREATE_TASK:
         lines += [f"<b>{esc(extraction.title)}</b>", f"For: {esc(extraction.assigned_to or 'unassigned')}"]
         if extraction.due_date:
@@ -317,8 +335,6 @@ def _summary(extraction) -> str:
         ]
     elif extraction.action_type == ParsedAction.ActionType.MARK_TASK_COMPLETE:
         lines.append(f"Task matching: <b>{esc(extraction.task_search_text)}</b>")
-    if extraction.confidence < settings.AUTOMATIC_ACTION_CONFIDENCE_THRESHOLD:
-        lines.append("\n<i>I’m not completely certain, so please check this carefully.</i>")
     lines.append("\nIs this right?")
     return "\n".join(lines)
 
@@ -338,24 +354,82 @@ def _update_incoming_body(conversation: TelegramConversation) -> None:
     conversation.incoming_email.save(update_fields=["body_text", "updated_at"])
 
 
-def _extract_and_respond(conversation: TelegramConversation, bot: TelegramBot) -> None:
-    extraction = extract_telegram_action(
-        conversation.transcript,
-        current_date=timezone.localdate(),
-        sender_role=conversation.requested_by.role,
+def _batch_position(conversation: TelegramConversation) -> tuple[int, int]:
+    total = conversation.batch_size or len(conversation.pending_extractions) or 1
+    return min(conversation.batch_index + 1, total), total
+
+
+def _current_extraction(conversation: TelegramConversation) -> AssistantAction:
+    return AssistantAction.model_validate(
+        conversation.pending_extractions[conversation.batch_index]
     )
+
+
+def _finalize_conversation(conversation: TelegramConversation) -> None:
+    statuses = list(
+        conversation.incoming_email.parsed_actions.values_list("status", flat=True)
+    )
+    if statuses and all(status == ParsedAction.Status.FAILED for status in statuses):
+        incoming_status = IncomingEmail.Status.FAILED
+    elif any(
+        status in (ParsedAction.Status.PENDING_REVIEW, ParsedAction.Status.FAILED)
+        for status in statuses
+    ):
+        incoming_status = IncomingEmail.Status.PENDING_REVIEW
+    else:
+        incoming_status = IncomingEmail.Status.PROCESSED
+    conversation.status = TelegramConversation.Status.COMPLETED
+    conversation.completed_at = timezone.now()
+    conversation.transcript = []
+    conversation.incoming_email.status = incoming_status
+    conversation.incoming_email.save(update_fields=["status", "updated_at"])
+    conversation.save(
+        update_fields=["status", "completed_at", "transcript", "updated_at"]
+    )
+
+
+def _advance_conversation(
+    conversation: TelegramConversation, bot: TelegramBot, result_text: str
+) -> None:
+    if conversation.batch_index + 1 >= conversation.batch_size:
+        _finalize_conversation(conversation)
+        bot.send_message(conversation.chat.chat_id, result_text, reply_markup=main_menu())
+        return
+
+    conversation.batch_index += 1
+    conversation.parsed_action = None
+    conversation.draft_extraction = {}
+    conversation.clarification_count = 0
+    conversation.status = TelegramConversation.Status.AWAITING_CLARIFICATION
+    conversation.save(
+        update_fields=[
+            "batch_index",
+            "parsed_action",
+            "draft_extraction",
+            "clarification_count",
+            "status",
+            "updated_at",
+        ]
+    )
+    bot.send_message(conversation.chat.chat_id, result_text)
+    _prepare_current_action(conversation, bot)
+
+
+def _prepare_current_action(conversation: TelegramConversation, bot: TelegramBot) -> None:
+    extraction = _current_extraction(conversation)
     conversation.draft_extraction = extraction.model_dump(mode="json")
+    item_number, total_items = _batch_position(conversation)
 
     if extraction.action_type == ParsedAction.ActionType.UNSUPPORTED:
-        conversation.status = TelegramConversation.Status.COMPLETED
-        conversation.completed_at = timezone.now()
-        conversation.incoming_email.status = IncomingEmail.Status.PROCESSED
-        conversation.incoming_email.save(update_fields=["status", "updated_at"])
-        conversation.save(update_fields=["draft_extraction", "status", "completed_at", "updated_at"])
-        bot.send_message(
-            conversation.chat.chat_id,
-            "I can currently help with calendar events, tasks, notes, reminders, and completing tasks.",
-            reply_markup=main_menu(),
+        parsed = build_parsed_action_from_extraction(conversation.incoming_email, extraction)
+        parsed.status = ParsedAction.Status.REJECTED
+        parsed.save(update_fields=["status", "updated_at"])
+        conversation.parsed_action = parsed
+        conversation.save(update_fields=["draft_extraction", "parsed_action", "updated_at"])
+        _advance_conversation(
+            conversation,
+            bot,
+            f"Item {item_number} of {total_items} is not a supported LifeOS action, so I skipped it.",
         )
         return
 
@@ -375,7 +449,7 @@ def _extract_and_respond(conversation: TelegramConversation, bot: TelegramBot) -
         _update_incoming_body(conversation)
         sent = bot.send_message(
             conversation.chat.chat_id,
-            html.escape(prompt),
+            f"<b>Item {item_number} of {total_items}</b>\n{html.escape(prompt)}",
             reply_markup=_question_keyboard(conversation.id, options),
         )
         conversation.last_bot_message_id = sent.get("message_id")
@@ -388,22 +462,15 @@ def _extract_and_respond(conversation: TelegramConversation, bot: TelegramBot) -
         parsed.ambiguity_notes = list(parsed.ambiguity_notes) + [
             "Telegram clarification limit reached."
         ]
-        parsed.save(update_fields=["status", "ambiguity_notes"])
+        parsed.save(update_fields=["status", "ambiguity_notes", "updated_at"])
         conversation.parsed_action = parsed
-        conversation.status = TelegramConversation.Status.COMPLETED
-        conversation.completed_at = timezone.now()
-        conversation.incoming_email.status = IncomingEmail.Status.PENDING_REVIEW
-        conversation.incoming_email.save(update_fields=["status", "updated_at"])
-        conversation.save(
-            update_fields=["draft_extraction", "parsed_action", "status", "completed_at", "updated_at"]
-        )
-        bot.send_message(
-            conversation.chat.chat_id,
-            "I still couldn’t resolve that safely, so I placed it in the LifeOS Review queue.",
-            reply_markup=main_menu(),
+        conversation.save(update_fields=["draft_extraction", "parsed_action", "updated_at"])
+        _advance_conversation(
+            conversation,
+            bot,
+            f"Item {item_number} of {total_items} could not be made valid, so I placed it in LifeOS Review.",
         )
         return
-
 
     parsed = build_parsed_action_from_extraction(conversation.incoming_email, extraction)
     conversation.parsed_action = parsed
@@ -413,11 +480,51 @@ def _extract_and_respond(conversation: TelegramConversation, bot: TelegramBot) -
     )
     sent = bot.send_message(
         conversation.chat.chat_id,
-        _summary(extraction),
+        _summary(extraction, item_number=item_number, total_items=total_items),
         reply_markup=_confirmation_keyboard(conversation.id),
     )
     conversation.last_bot_message_id = sent.get("message_id")
     conversation.save(update_fields=["last_bot_message_id", "updated_at"])
+
+
+def _extract_and_respond(conversation: TelegramConversation, bot: TelegramBot) -> None:
+    current_date = timezone.localdate()
+    if not conversation.pending_extractions:
+        extracted = extract_telegram_action(
+            conversation.transcript,
+            current_date=current_date,
+            sender_role=conversation.requested_by.role,
+            multiple=True,
+        )
+        actions = extracted if isinstance(extracted, list) else [extracted]
+        if not actions:
+            raise ValueError("Telegram extraction returned no actions.")
+        actions = [normalise_action_inferences(action, current_date) for action in actions[:10]]
+        conversation.pending_extractions = [
+            action.model_dump(mode="json") for action in actions
+        ]
+        conversation.batch_size = len(actions)
+        conversation.batch_index = 0
+        conversation.save(
+            update_fields=["pending_extractions", "batch_size", "batch_index", "updated_at"]
+        )
+    else:
+        current = _current_extraction(conversation)
+        extracted = extract_telegram_action(
+            conversation.transcript,
+            current_date=current_date,
+            sender_role=conversation.requested_by.role,
+            multiple=False,
+            current_action=current.model_dump(mode="json"),
+        )
+        extraction = extracted[0] if isinstance(extracted, list) else extracted
+        extraction = normalise_action_inferences(extraction, current_date)
+        pending = list(conversation.pending_extractions)
+        pending[conversation.batch_index] = extraction.model_dump(mode="json")
+        conversation.pending_extractions = pending
+        conversation.save(update_fields=["pending_extractions", "updated_at"])
+
+    _prepare_current_action(conversation, bot)
 
 
 def _handle_text(
@@ -834,9 +941,25 @@ def _cancel_active(chat: TelegramChat, user: TelegramUser, bot: TelegramBot) -> 
 
 
 def _cancel_conversation(conversation: TelegramConversation, bot: TelegramBot) -> None:
+    item_number, total_items = _batch_position(conversation)
     if conversation.parsed_action and conversation.parsed_action.status != ParsedAction.Status.EXECUTED:
         conversation.parsed_action.status = ParsedAction.Status.REJECTED
         conversation.parsed_action.save(update_fields=["status", "updated_at"])
+    if conversation.batch_index + 1 < conversation.batch_size:
+        _advance_conversation(
+            conversation,
+            bot,
+            f"Skipped Item {item_number} of {total_items}.",
+        )
+        return
+    if conversation.batch_size > 1:
+        _finalize_conversation(conversation)
+        bot.send_message(
+            conversation.chat.chat_id,
+            f"Skipped Item {item_number} of {total_items}.",
+            reply_markup=main_menu(),
+        )
+        return
     conversation.status = TelegramConversation.Status.CANCELLED
     conversation.completed_at = timezone.now()
     conversation.incoming_email.status = IncomingEmail.Status.PROCESSED
@@ -1090,31 +1213,27 @@ def _confirm_conversation(conversation: TelegramConversation, bot: TelegramBot) 
     try:
         outcome, extra = admin_approve_and_execute(locked.parsed_action)
     except Exception as exc:  # noqa: BLE001 - record safely and avoid uncertain automatic retry
-        locked.status = TelegramConversation.Status.FAILED
         locked.last_error = str(exc)[:2000]
-        locked.incoming_email.status = IncomingEmail.Status.FAILED
-        locked.incoming_email.last_error = str(exc)[:2000]
-        locked.incoming_email.save(update_fields=["status", "last_error", "updated_at"])
-        locked.save(update_fields=["status", "last_error", "updated_at"])
+        if locked.parsed_action:
+            locked.parsed_action.status = ParsedAction.Status.FAILED
+            locked.parsed_action.failure_reason = locked.last_error
+            locked.parsed_action.save(update_fields=["status", "failure_reason", "updated_at"])
+        locked.save(update_fields=["last_error", "updated_at"])
         logger.exception("Telegram conversation execution failed conversation_id=%s", locked.id)
-        bot.send_message(
-            locked.chat.chat_id,
-            "I couldn’t finish that safely. Nothing will be retried automatically; please check LifeOS Review.",
-            reply_markup=main_menu(),
+        item_number, total_items = _batch_position(locked)
+        _advance_conversation(
+            locked,
+            bot,
+            f"Item {item_number} of {total_items} failed. I did not retry it; the other items are unaffected.",
         )
         return
 
-    locked.status = TelegramConversation.Status.COMPLETED
-    locked.completed_at = timezone.now()
-    locked.transcript = []
-    locked.incoming_email.status = (
-        IncomingEmail.Status.PENDING_REVIEW
-        if outcome == "pending_review"
-        else IncomingEmail.Status.PROCESSED
+    item_number, total_items = _batch_position(locked)
+    _advance_conversation(
+        locked,
+        bot,
+        f"Item {item_number} of {total_items}: {_outcome_text(outcome, extra)}",
     )
-    locked.incoming_email.save(update_fields=["status", "updated_at"])
-    locked.save(update_fields=["status", "completed_at", "transcript", "updated_at"])
-    bot.send_message(locked.chat.chat_id, _outcome_text(outcome, extra), reply_markup=main_menu())
 
 
 def _handle_command(
@@ -1638,7 +1757,11 @@ def _handle_callback(data: str, chat: TelegramChat, user: TelegramUser, bot: Tel
         if conversation.parsed_action:
             conversation.parsed_action.delete()
             conversation.parsed_action = None
-        prompt = "What should I change? Send the corrected detail or rewrite the request."
+        item_number, total_items = _batch_position(conversation)
+        prompt = (
+            f"Item {item_number} of {total_items}: What should I change? "
+            "Send the corrected detail or rewrite this item."
+        )
         conversation.status = TelegramConversation.Status.AWAITING_CLARIFICATION
         conversation.transcript = list(conversation.transcript) + [{"role": "assistant", "text": prompt}]
         conversation.save(update_fields=["parsed_action", "status", "transcript", "updated_at"])
