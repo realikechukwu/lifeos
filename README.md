@@ -130,14 +130,26 @@ choose the correct single-occurrence or whole-series operation in Google
 Calendar. Scheduled reminders created through Telegram continue to use the
 established Gmail reminder delivery.
 
-### Daily Telegram briefing
+### Scheduled Telegram briefings
 
 After an authorised user has started the bot privately, LifeOS sends a daily
 private briefing at 07:30 local app time by default. It contains that day's
 calendar, overdue/due tasks, and pending reminders, with links into the inbox.
 Users can switch it on/off or change its time with `/settings`. Run
 `send_telegram_briefings` every minute using the supplied systemd timer; a
-per-user/day record prevents duplicates.
+per-user/type/day record prevents duplicates.
+
+The same runner also sends two planning digests in the app's configured local
+timezone:
+
+- Every Sunday at 18:00, a week-ahead digest covering Monday through Sunday.
+- On the first Sunday of each month at 09:30, a month-ahead digest covering the
+  next day through the day before the same date in the next calendar month.
+
+Planning digests include calendar events and Patchwork shifts, open tasks due
+inside the period, and pending reminders. They follow the main briefing on/off
+preference; changing the configurable daily time does not move the weekly or
+monthly schedules.
 
 ```bash
 python manage.py send_telegram_briefings
@@ -269,6 +281,10 @@ original Phase 1 liveness check, kept for backwards compatibility.
 
 ## Tests
 
+The automated suite is intentionally made of isolated unit and integration
+tests rather than live-account browser end-to-end tests. The full suite takes
+only a few seconds locally, so keep it as the default confidence check:
+
 ```bash
 python manage.py test
 ```
@@ -282,13 +298,21 @@ node --test web/tests/calendar_ui.test.cjs
 All Gmail, Calendar, and OpenAI calls are mocked; tests never hit the network
 and run against SQLite in memory.
 
+For fast feedback while changing one area, run its test class first, then run
+the full suite before merging. For example, the Telegram briefing tests are:
+
+```bash
+python manage.py test assistant.tests.test_telegram_inbox.TelegramBriefingTests
+```
+
 ## Manual testing
 
 See [`MANUAL_TEST_PHASE_1.md`](MANUAL_TEST_PHASE_1.md),
 [`MANUAL_TEST_PHASE_2.md`](MANUAL_TEST_PHASE_2.md), and
 [`MANUAL_TEST_PHASE_3.md`](MANUAL_TEST_PHASE_3.md) for end-to-end steps
 using the real Gmail/Calendar/OpenAI accounts and (for Phase 3) a real
-Oracle deployment.
+Oracle deployment. These checks are not automated and should be used when a
+change touches the corresponding external integration or deployment path.
 
 ## Out of scope so far
 

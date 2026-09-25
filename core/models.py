@@ -468,20 +468,33 @@ class TelegramPreference(models.Model):
 
 
 class TelegramBriefingDelivery(models.Model):
-    """Idempotency record for one user's private daily Telegram briefing."""
+    """Idempotency record for one user's private Telegram briefing."""
+
+    class BriefingType(models.TextChoices):
+        DAILY = "daily", "Daily"
+        WEEKLY = "weekly", "Weekly"
+        MONTHLY = "monthly", "Monthly"
 
     user = models.ForeignKey(TelegramUser, on_delete=models.CASCADE, related_name="briefing_deliveries")
+    briefing_type = models.CharField(
+        max_length=10,
+        choices=BriefingType.choices,
+        default=BriefingType.DAILY,
+    )
     briefing_date = models.DateField()
     sent_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ["-briefing_date", "-sent_at"]
         constraints = [
-            models.UniqueConstraint(fields=["user", "briefing_date"], name="telegram_one_briefing_per_day"),
+            models.UniqueConstraint(
+                fields=["user", "briefing_type", "briefing_date"],
+                name="telegram_one_briefing_per_type_day",
+            ),
         ]
 
     def __str__(self):
-        return f"Telegram briefing for {self.user} on {self.briefing_date}"
+        return f"Telegram {self.briefing_type} briefing for {self.user} on {self.briefing_date}"
 
 
 class TelegramChat(models.Model):

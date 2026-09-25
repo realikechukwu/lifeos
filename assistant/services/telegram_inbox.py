@@ -76,14 +76,14 @@ def _calendar_item_for_event(event: CalendarEventRecord) -> TelegramCalendarItem
     )
 
 
-def calendar_items(days: int = 30) -> list[TelegramCalendarItem]:
-    """Merge ordinary events and active Patchwork shifts chronologically."""
-    today = timezone.localdate()
-    horizon = today + timedelta(days=days)
+def calendar_items_between(start_date: date, end_date: date) -> list[TelegramCalendarItem]:
+    """Merge events and shifts in the half-open ``[start_date, end_date)`` range."""
+    if end_date <= start_date:
+        return []
     items = [
         _calendar_item_for_event(event)
         for event in CalendarEventRecord.objects.filter(
-            appointment_date__gte=today, appointment_date__lte=horizon
+            appointment_date__gte=start_date, appointment_date__lt=end_date
         )
     ]
 
@@ -92,12 +92,12 @@ def calendar_items(days: int = 30) -> list[TelegramCalendarItem]:
     shifts = PatchworkShift.objects.filter(
         active=True,
         suppressed=False,
-        starts_at__gte=_aware(today - timedelta(days=1)),
-        starts_at__lt=_aware(horizon + timedelta(days=2)),
+        starts_at__gte=_aware(start_date - timedelta(days=1)),
+        starts_at__lt=_aware(end_date + timedelta(days=1)),
     )
     for shift in shifts:
         item = calendar_item_for_shift(shift)
-        if today <= item.appointment_date <= horizon:
+        if start_date <= item.appointment_date < end_date:
             items.append(item)
 
     return sorted(
@@ -109,6 +109,12 @@ def calendar_items(days: int = 30) -> list[TelegramCalendarItem]:
             item.object_id,
         ),
     )
+
+
+def calendar_items(days: int = 30) -> list[TelegramCalendarItem]:
+    """Merge calendar items from today through ``days`` days ahead, inclusive."""
+    today = timezone.localdate()
+    return calendar_items_between(today, today + timedelta(days=days + 1))
 
 
 def _slice(queryset, page: int):
@@ -183,6 +189,24 @@ def today_items():
         Reminder.objects.filter(
             status__in=[Reminder.Status.PENDING, Reminder.Status.FAILED], reminder_date=today
         ).order_by("reminder_time")
+    )
+    return events, tasks, reminders
+
+
+def planning_items(start_date: date, end_date: date):
+    """Return scheduled items in a half-open date range for planning digests."""
+    events = calendar_items_between(start_date, end_date)
+    tasks = list(
+        Task.objects.exclude(status__in=[Task.Status.COMPLETED, Task.Status.CANCELLED])
+        .filter(due_date__gte=start_date, due_date__lt=end_date)
+        .order_by("due_date", "due_time", "created_at")
+    )
+    reminders = list(
+        Reminder.objects.filter(
+            status__in=[Reminder.Status.PENDING, Reminder.Status.FAILED],
+            reminder_date__gte=start_date,
+            reminder_date__lt=end_date,
+        ).order_by("reminder_date", "reminder_time")
     )
     return events, tasks, reminders
 

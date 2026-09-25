@@ -1,5 +1,5 @@
 [Unit]
-Description=Check for due LifeOS Telegram daily briefings each minute
+Description=Check for due LifeOS Telegram briefings each minute
 
 [Timer]
 OnBootSec=20s

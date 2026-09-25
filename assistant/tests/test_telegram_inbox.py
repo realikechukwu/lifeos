@@ -1,12 +1,13 @@
 from datetime import date, datetime, time, timedelta
 from unittest.mock import MagicMock, patch
+from zoneinfo import ZoneInfo
 
 from django.test import TestCase, override_settings
 from django.utils import timezone
 
 from assistant.management.commands.send_telegram_briefings import send_due_briefings
 from assistant.services.google_calendar import reschedule_calendar_event
-from assistant.services.telegram_handlers import process_telegram_update
+from assistant.services.telegram_handlers import build_planning_message, process_telegram_update
 from core.models import (
     CalendarEventRecord,
     IncomingEmail,
@@ -364,17 +365,133 @@ class TelegramInboxTests(TestCase):
 
 @override_settings(**SETTINGS)
 class TelegramBriefingTests(TestCase):
-    def test_sends_once_to_started_private_user_at_configured_time(self):
+    def _started_user(self, *, briefing_time=time(7, 30)):
         user = TelegramUser.objects.create(user_id=446464092, role="ike", display_name="Ike")
         TelegramChat.objects.create(chat_id=446464092, chat_type="private", authorised=True)
+        TelegramPreference.objects.create(user=user, briefing_time=briefing_time)
+        return user
+
+    def _calendar_event(self, title: str, appointment_date: date):
+        email = IncomingEmail.objects.create(
+            gmail_message_id=f"briefing-{title}", outer_sender="ike@example.com"
+        )
+        action = ParsedAction.objects.create(
+            incoming_email=email,
+            action_type=ParsedAction.ActionType.CREATE_CALENDAR_EVENT,
+            title=title,
+            appointment_date=appointment_date,
+        )
+        return CalendarEventRecord.objects.create(
+            parsed_action=action,
+            incoming_email=email,
+            google_event_id=f"google-{title}",
+            calendar_id="primary",
+            title=title,
+            appointment_date=appointment_date,
+            start_time=time(9, 0),
+            end_time=time(10, 0),
+        )
+
+    def test_sends_once_to_started_private_user_at_configured_time(self):
+        user = self._started_user()
         now = datetime(2026, 8, 8, 7, 30, tzinfo=timezone.get_current_timezone())
-        TelegramPreference.objects.create(user=user, briefing_time=time(7, 30))
         bot = FakeTelegramBot()
 
         self.assertEqual(send_due_briefings(bot=bot, now=now), (1, 0))
         self.assertEqual(send_due_briefings(bot=bot, now=now), (0, 0))
         self.assertEqual(TelegramBriefingDelivery.objects.count(), 1)
+        self.assertEqual(
+            TelegramBriefingDelivery.objects.get().briefing_type,
+            TelegramBriefingDelivery.BriefingType.DAILY,
+        )
         self.assertIn("LifeOS today", bot.messages[0][1])
+
+    def test_sunday_evening_sends_next_monday_to_sunday_weekly_digest(self):
+        user = self._started_user()
+        now = datetime(2026, 8, 9, 18, 0, tzinfo=timezone.get_current_timezone())
+        self._calendar_event("Monday clinic", date(2026, 8, 10))
+        Task.objects.create(title="Friday deadline", due_date=date(2026, 8, 14))
+        Reminder.objects.create(
+            title="Sunday reminder",
+            recipient="ike",
+            reminder_date=date(2026, 8, 16),
+            reminder_time=time(17, 0),
+        )
+        Task.objects.create(title="Outside window", due_date=date(2026, 8, 17))
+        bot = FakeTelegramBot()
+
+        self.assertEqual(send_due_briefings(bot=bot, now=now), (1, 0))
+        self.assertEqual(send_due_briefings(bot=bot, now=now), (0, 0))
+
+        message = bot.messages[0][1]
+        self.assertIn("LifeOS week ahead", message)
+        self.assertIn("Mon 10 Aug 2026 – Sun 16 Aug 2026", message)
+        self.assertIn("Monday clinic", message)
+        self.assertIn("Friday deadline", message)
+        self.assertIn("Sunday reminder", message)
+        self.assertNotIn("Outside window", message)
+        self.assertEqual(
+            TelegramBriefingDelivery.objects.get(user=user).briefing_type,
+            TelegramBriefingDelivery.BriefingType.WEEKLY,
+        )
+
+    def test_first_sunday_separates_daily_and_monthly_delivery_times(self):
+        user = self._started_user()
+        # London is one hour ahead of UTC while daylight-saving time is active.
+        daily_time = datetime(2026, 9, 6, 6, 30, tzinfo=ZoneInfo("UTC"))
+        monthly_time = datetime(2026, 9, 6, 8, 30, tzinfo=ZoneInfo("UTC"))
+        Task.objects.create(title="Inside month", due_date=date(2026, 10, 6))
+        Task.objects.create(title="End boundary", due_date=date(2026, 10, 7))
+        bot = FakeTelegramBot()
+
+        self.assertEqual(send_due_briefings(bot=bot, now=daily_time), (1, 0))
+        self.assertIn("LifeOS today", bot.messages[0][1])
+        self.assertEqual(send_due_briefings(bot=bot, now=monthly_time), (1, 0))
+        self.assertEqual(send_due_briefings(bot=bot, now=monthly_time), (0, 0))
+
+        monthly_message = bot.messages[1][1]
+        self.assertIn("LifeOS month ahead", monthly_message)
+        self.assertIn("Mon 7 Sep 2026 – Tue 6 Oct 2026", monthly_message)
+        self.assertIn("Inside month", monthly_message)
+        self.assertNotIn("End boundary", monthly_message)
+        self.assertEqual(
+            set(TelegramBriefingDelivery.objects.filter(user=user).values_list("briefing_type", flat=True)),
+            {
+                TelegramBriefingDelivery.BriefingType.DAILY,
+                TelegramBriefingDelivery.BriefingType.MONTHLY,
+            },
+        )
+
+    def test_later_sunday_morning_does_not_send_monthly_digest(self):
+        self._started_user()
+        now = datetime(2026, 9, 13, 9, 30, tzinfo=timezone.get_current_timezone())
+        bot = FakeTelegramBot()
+
+        self.assertEqual(send_due_briefings(bot=bot, now=now), (0, 0))
+        self.assertEqual(bot.messages, [])
+        self.assertFalse(
+            TelegramBriefingDelivery.objects.filter(
+                briefing_type=TelegramBriefingDelivery.BriefingType.MONTHLY
+            ).exists()
+        )
+
+    def test_planning_message_is_bounded_and_html_safe(self):
+        for index in range(11):
+            self._calendar_event(
+                f"Unsafe <event> & planning title {index} " + "&" * 100,
+                date(2026, 9, 7),
+            )
+
+        message = build_planning_message(
+            period="weekly",
+            start_date=date(2026, 9, 7),
+            end_date=date(2026, 9, 14),
+        )
+
+        self.assertLess(len(message), 4096)
+        self.assertNotIn("<event>", message)
+        self.assertIn("&lt;event&gt;", message)
+        self.assertIn("…and 1 more", message)
 
 
 @override_settings(AUTHORISED_EMAIL_IKE="ike@example.com", GOOGLE_CALENDAR_ID="primary")

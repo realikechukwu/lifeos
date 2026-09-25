@@ -52,10 +52,10 @@ class TelegramPreferenceAdmin(admin.ModelAdmin):
 
 @admin.register(TelegramBriefingDelivery)
 class TelegramBriefingDeliveryAdmin(admin.ModelAdmin):
-    list_display = ("user", "briefing_date", "sent_at")
-    list_filter = ("briefing_date",)
+    list_display = ("user", "briefing_type", "briefing_date", "sent_at")
+    list_filter = ("briefing_type", "briefing_date")
     search_fields = ("user__display_name", "user__username", "user__user_id")
-    readonly_fields = ("user", "briefing_date", "sent_at")
+    readonly_fields = ("user", "briefing_type", "briefing_date", "sent_at")
 
 
 @admin.register(TelegramChat)

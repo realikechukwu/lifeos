@@ -38,6 +38,7 @@ from .telegram_inbox import (
     cancel_reminder,
     open_tasks,
     pending_reminders,
+    planning_items,
     recent_notes,
     search_lifeos,
     snooze_reminder,
@@ -712,6 +713,84 @@ def build_today_message() -> str:
         )
     if len(lines) == 1:
         lines.append("Nothing scheduled or due today.")
+    return "\n".join(lines)
+
+
+PLANNING_SECTION_LIMIT = 10
+
+
+def _planning_date_label(value: date) -> str:
+    return f"{value:%a} {value.day} {value:%b %Y}"
+
+
+def _planning_title(value: str) -> str:
+    """Escape and truncate a title while counting its rendered HTML length."""
+    value = value.strip()
+    escaped = html.escape(value)
+    if len(escaped) <= 72:
+        return escaped
+
+    parts = []
+    escaped_length = 0
+    for character in value:
+        escaped_character = html.escape(character)
+        if escaped_length + len(escaped_character) > 71:
+            break
+        parts.append(escaped_character)
+        escaped_length += len(escaped_character)
+    return "".join(parts).rstrip() + "…"
+
+
+def build_planning_message(*, period: str, start_date: date, end_date: date) -> str:
+    """Render a bounded week-ahead or month-ahead planning digest."""
+    if period not in {"weekly", "monthly"}:
+        raise ValueError("Planning briefing period must be weekly or monthly.")
+    if end_date <= start_date:
+        raise ValueError("Planning briefing end date must be after its start date.")
+    events, tasks, reminders = planning_items(start_date, end_date)
+    period_label = "week" if period == "weekly" else "month"
+    final_date = end_date - timedelta(days=1)
+    lines = [
+        f"🗓 <b>LifeOS {period_label} ahead</b>",
+        f"<b>{_planning_date_label(start_date)} – {_planning_date_label(final_date)}</b>",
+    ]
+
+    def append_limited(items, formatter) -> None:
+        lines.extend(formatter(item) for item in items[:PLANNING_SECTION_LIMIT])
+        if len(items) > PLANNING_SECTION_LIMIT:
+            lines.append(f"• …and {len(items) - PLANNING_SECTION_LIMIT} more")
+
+    if events:
+        lines.append("\n<b>Calendar</b>")
+        append_limited(
+            events,
+            lambda event: (
+                f"• {_planning_date_label(event.appointment_date)}, "
+                f"{event.start_time.strftime('%H:%M') if event.start_time else 'all day'}"
+                f" — {_planning_title(event.title)}"
+            ),
+        )
+    if tasks:
+        lines.append("\n<b>Tasks due</b>")
+        append_limited(
+            tasks,
+            lambda task: (
+                f"• {_planning_date_label(task.due_date)}"
+                f"{', ' + task.due_time.strftime('%H:%M') if task.due_time else ''}"
+                f" — {_planning_title(task.title)}"
+            ),
+        )
+    if reminders:
+        lines.append("\n<b>Reminders</b>")
+        append_limited(
+            reminders,
+            lambda reminder: (
+                f"• {_planning_date_label(reminder.reminder_date)}, {reminder.reminder_time:%H:%M}"
+                f" — {_planning_title(reminder.title)}"
+            ),
+        )
+    if not events and not tasks and not reminders:
+        lines.append(f"Nothing scheduled for the {period_label} ahead.")
     return "\n".join(lines)
 
 

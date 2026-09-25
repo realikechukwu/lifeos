@@ -1,5 +1,5 @@
 [Unit]
-Description=Family Assistant — send due Telegram daily briefings
+Description=Family Assistant — send due Telegram briefings
 After=network.target
 
 [Service]

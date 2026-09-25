@@ -241,6 +241,12 @@ a second instance of a unit that's already running, and both underlying
 management commands are themselves idempotent/safe-to-overlap (see the
 comments in each `.service` file).
 
+The Telegram command uses `APP_TIMEZONE` to send the configurable daily
+briefing, a month-ahead plan at 09:30 on the first Sunday (Sunday with local
+day 1–7), and a week-ahead plan at 18:00 every Sunday. Leave its timer on the
+every-minute schedule so these guards remain correct across London daylight-
+saving changes; no separate cron entries are needed.
+
 ## 13. Configuring the reverse proxy
 
 ### Path A — dedicated Nginx
