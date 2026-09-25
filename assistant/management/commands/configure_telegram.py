@@ -36,6 +36,8 @@ class Command(BaseCommand):
             [
                 {"command": "start", "description": "Open the LifeOS menu"},
                 {"command": "today", "description": "Show today's LifeOS view"},
+                {"command": "week", "description": "Show the next 7 days"},
+                {"command": "month", "description": "Show one month ahead"},
                 {"command": "tasks", "description": "Show open tasks"},
                 {"command": "calendar", "description": "Show upcoming calendar events"},
                 {"command": "notes", "description": "Browse recent notes"},

@@ -5,6 +5,7 @@ They never create ``IncomingEmail`` or ``ParsedAction`` records, keeping the
 Telegram inbox separate from the email extraction/authorisation pipeline.
 """
 
+from calendar import monthrange
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -16,6 +17,13 @@ from core.models import AuditLog, CalendarEventRecord, Note, PatchworkShift, Rem
 
 
 PAGE_SIZE = 6
+
+
+def one_month_after(value: date) -> date:
+    """Return the same day next month, clamped to that month's final day."""
+    year = value.year + (value.month == 12)
+    month = 1 if value.month == 12 else value.month + 1
+    return value.replace(year=year, month=month, day=min(value.day, monthrange(year, month)[1]))
 
 
 @dataclass(frozen=True)

@@ -1,6 +1,5 @@
 """Send due daily, weekly, and monthly private LifeOS Telegram briefings."""
 
-from calendar import monthrange
 from dataclasses import dataclass
 from datetime import date, time, timedelta
 from zoneinfo import ZoneInfo
@@ -16,6 +15,7 @@ from assistant.services.telegram_handlers import (
     build_today_message,
     today_keyboard,
 )
+from assistant.services.telegram_inbox import one_month_after
 from core.models import TelegramBriefingDelivery, TelegramChat, TelegramPreference
 
 
@@ -33,12 +33,6 @@ class DueBriefing:
 
 def _same_minute(left: time, right: time) -> bool:
     return left.hour == right.hour and left.minute == right.minute
-
-
-def _one_month_after(value: date) -> date:
-    year = value.year + (value.month == 12)
-    month = 1 if value.month == 12 else value.month + 1
-    return value.replace(year=year, month=month, day=min(value.day, monthrange(year, month)[1]))
 
 
 def due_briefings(preference: TelegramPreference, local_now) -> list[DueBriefing]:
@@ -69,7 +63,7 @@ def due_briefings(preference: TelegramPreference, local_now) -> list[DueBriefing
                 TelegramBriefingDelivery.BriefingType.MONTHLY,
                 local_date,
                 start_date,
-                _one_month_after(start_date),
+                one_month_after(start_date),
             )
         )
     return due

@@ -36,6 +36,7 @@ from .telegram_inbox import (
     calendar_item_for_shift,
     calendar_items,
     cancel_reminder,
+    one_month_after,
     open_tasks,
     pending_reminders,
     planning_items,
@@ -77,8 +78,9 @@ def _keyboard(*rows: list[dict]) -> dict:
 
 def main_menu() -> dict:
     return _keyboard(
-        # First three rows are for viewing/managing existing LifeOS items.
+        # The top rows are for viewing/managing existing LifeOS items.
         [_button("☀️ Today", "tg:today:show"), _button("📋 Tasks", "tg:inbox:tasks:0")],
+        [_button("📆 Week", "tg:plan:weekly"), _button("🗓 Month", "tg:plan:monthly")],
         [_button("🗓 Calendar", "tg:inbox:calendar:0"), _button("📚 Notes", "tg:inbox:notes:0")],
         [_button("🔔 Reminders", "tg:inbox:reminders:0"), _button("⚙️ Briefing", "tg:settings:show")],
         # Every creation action starts with the same visual cue.
@@ -807,6 +809,20 @@ def _show_today(chat_id: int, bot: TelegramBot) -> None:
     bot.send_message(chat_id, build_today_message(), reply_markup=today_keyboard())
 
 
+def _show_planning(period: str, chat_id: int, bot: TelegramBot) -> None:
+    start_date = timezone.localdate()
+    end_date = (
+        start_date + timedelta(days=7)
+        if period == "weekly"
+        else one_month_after(start_date)
+    )
+    bot.send_message(
+        chat_id,
+        build_planning_message(period=period, start_date=start_date, end_date=end_date),
+        reply_markup=today_keyboard(),
+    )
+
+
 def _cancel_active(chat: TelegramChat, user: TelegramUser, bot: TelegramBot) -> None:
     active = TelegramConversation.objects.filter(
         chat=chat, requested_by=user, status__in=ACTIVE_STATUSES
@@ -1131,6 +1147,12 @@ def _handle_command(
     if command == "/today":
         _show_today(chat.chat_id, bot)
         return True
+    if command == "/week":
+        _show_planning("weekly", chat.chat_id, bot)
+        return True
+    if command == "/month":
+        _show_planning("monthly", chat.chat_id, bot)
+        return True
     if command == "/calendar":
         _list_calendar(chat.chat_id, bot)
         return True
@@ -1291,6 +1313,9 @@ def _handle_callback(data: str, chat: TelegramChat, user: TelegramUser, bot: Tel
         return
     if action == "today":
         _show_today(chat.chat_id, bot)
+        return
+    if action == "plan" and target in {"weekly", "monthly"}:
+        _show_planning(target, chat.chat_id, bot)
         return
     if action == "inbox" and len(callback_parts) >= 4:
         try:

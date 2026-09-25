@@ -120,8 +120,11 @@ group. Alternatively, put the group's negative numeric id in
 `TELEGRAM_ALLOWED_GROUP_CHAT_IDS`. BotFather's Group Privacy must be off for
 ordinary group messages rather than commands only.
 
-Useful commands are `/today`, `/tasks`, `/calendar`, `/notes`, `/reminders`,
-`/search <words>`, `/settings`, `/upcoming`, `/cancel`, `/help`, and `/linkgroup`. The inline
+Useful commands are `/today`, `/week`, `/month`, `/tasks`, `/calendar`, `/notes`,
+`/reminders`, `/search <words>`, `/settings`, `/upcoming`, `/cancel`, `/help`, and
+`/linkgroup`. `/week` shows today through the next seven-day boundary, while
+`/month` shows today through the same date next month; these read-only manual
+views do not affect scheduled-delivery records. The inline
 menu provides a paginated LifeOS inbox: browse tasks, notes, reminders, and
 calendar events; complete/edit tasks; view/edit notes; snooze/cancel
 reminders; and reschedule/cancel one-off calendar events with a final

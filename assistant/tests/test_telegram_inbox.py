@@ -8,6 +8,7 @@ from django.utils import timezone
 from assistant.management.commands.send_telegram_briefings import send_due_briefings
 from assistant.services.google_calendar import reschedule_calendar_event
 from assistant.services.telegram_handlers import build_planning_message, process_telegram_update
+from assistant.services.telegram_inbox import one_month_after
 from core.models import (
     CalendarEventRecord,
     IncomingEmail,
@@ -147,6 +148,30 @@ class TelegramInboxTests(TestCase):
         process_telegram_update(message_update(102, "/reminders"), bot=self.bot)
         self.assertIn("Pay council tax", self.bot.messages[-1][1])
 
+    def test_week_and_month_commands_show_rolling_plans_without_delivery_records(self):
+        today = timezone.localdate()
+        self._calendar_event("Today event", day_offset=0)
+        self._calendar_event("Sixth day event", day_offset=6)
+        self._calendar_event("Weekly boundary event", day_offset=7)
+        month_end = one_month_after(today)
+        Task.objects.create(title="Inside monthly window", due_date=month_end - timedelta(days=1))
+        Task.objects.create(title="Monthly boundary", due_date=month_end)
+
+        process_telegram_update(message_update(103, "/week"), bot=self.bot)
+        weekly_message = self.bot.messages[-1][1]
+        self.assertIn("LifeOS week ahead", weekly_message)
+        self.assertIn("Today event", weekly_message)
+        self.assertIn("Sixth day event", weekly_message)
+        self.assertNotIn("Weekly boundary event", weekly_message)
+
+        process_telegram_update(message_update(104, "/month"), bot=self.bot)
+        monthly_message = self.bot.messages[-1][1]
+        self.assertIn("LifeOS month ahead", monthly_message)
+        self.assertIn("Weekly boundary event", monthly_message)
+        self.assertIn("Inside monthly window", monthly_message)
+        self.assertNotIn("Monthly boundary", monthly_message)
+        self.assertEqual(TelegramBriefingDelivery.objects.count(), 0)
+
     def test_main_menu_clearly_separates_manage_and_create_actions(self):
         process_telegram_update(message_update(105, "/start"), bot=self.bot)
         self.assertEqual(
@@ -160,6 +185,8 @@ class TelegramInboxTests(TestCase):
             for button in row
         ]
         self.assertIn("📋 Tasks", buttons)
+        self.assertIn("📆 Week", buttons)
+        self.assertIn("🗓 Month", buttons)
         self.assertIn("📚 Notes", buttons)
         self.assertIn("🔔 Reminders", buttons)
         self.assertEqual([label for label in buttons if label in {"➕ Task", "➕ Event", "➕ Note", "➕ Reminder"}], [
@@ -297,7 +324,17 @@ class TelegramInboxTests(TestCase):
 
     def test_primary_non_home_screens_have_back_and_home_navigation(self):
         for update_id, command in enumerate(
-            ["/today", "/tasks", "/calendar", "/notes", "/reminders", "/settings", "/upcoming"],
+            [
+                "/today",
+                "/week",
+                "/month",
+                "/tasks",
+                "/calendar",
+                "/notes",
+                "/reminders",
+                "/settings",
+                "/upcoming",
+            ],
             start=200,
         ):
             process_telegram_update(message_update(update_id, command), bot=self.bot)
