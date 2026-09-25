@@ -13,6 +13,7 @@ from assistant.services.telegram import TelegramBot
 from assistant.services.telegram_handlers import (
     build_planning_message,
     build_today_message,
+    planning_keyboard,
     today_keyboard,
 )
 from assistant.services.telegram_inbox import one_month_after
@@ -100,13 +101,15 @@ def send_due_briefings(*, bot=None, now=None) -> tuple[int, int]:
             try:
                 if briefing.briefing_type == TelegramBriefingDelivery.BriefingType.DAILY:
                     message = build_today_message()
+                    reply_markup = today_keyboard()
                 else:
                     message = build_planning_message(
                         period=briefing.briefing_type,
                         start_date=briefing.start_date,
                         end_date=briefing.end_date,
                     )
-                bot.send_message(chat.chat_id, message, reply_markup=today_keyboard())
+                    reply_markup = planning_keyboard()
+                bot.send_message(chat.chat_id, message, reply_markup=reply_markup)
             except Exception:  # noqa: BLE001 - retry is safe because claim is removed
                 delivery.delete()
                 failed += 1

@@ -7,7 +7,11 @@ from django.utils import timezone
 
 from assistant.management.commands.send_telegram_briefings import send_due_briefings
 from assistant.services.google_calendar import reschedule_calendar_event
-from assistant.services.telegram_handlers import build_planning_message, process_telegram_update
+from assistant.services.telegram_handlers import (
+    build_planning_message,
+    planning_keyboard,
+    process_telegram_update,
+)
 from assistant.services.telegram_inbox import one_month_after
 from core.models import (
     CalendarEventRecord,
@@ -408,9 +412,16 @@ class TelegramBriefingTests(TestCase):
         TelegramPreference.objects.create(user=user, briefing_time=briefing_time)
         return user
 
-    def _calendar_event(self, title: str, appointment_date: date):
+    def _calendar_event(
+        self,
+        title: str,
+        appointment_date: date,
+        start_time: time | None = time(9, 0),
+        end_time: time | None = time(10, 0),
+    ):
+        unique_suffix = f"{title}-{appointment_date.isoformat()}-{start_time}"
         email = IncomingEmail.objects.create(
-            gmail_message_id=f"briefing-{title}", outer_sender="ike@example.com"
+            gmail_message_id=f"briefing-{unique_suffix}", outer_sender="ike@example.com"
         )
         action = ParsedAction.objects.create(
             incoming_email=email,
@@ -421,12 +432,12 @@ class TelegramBriefingTests(TestCase):
         return CalendarEventRecord.objects.create(
             parsed_action=action,
             incoming_email=email,
-            google_event_id=f"google-{title}",
+            google_event_id=f"google-{unique_suffix}",
             calendar_id="primary",
             title=title,
             appointment_date=appointment_date,
-            start_time=time(9, 0),
-            end_time=time(10, 0),
+            start_time=start_time,
+            end_time=end_time,
         )
 
     def test_sends_once_to_started_private_user_at_configured_time(self):
@@ -529,6 +540,97 @@ class TelegramBriefingTests(TestCase):
         self.assertNotIn("<event>", message)
         self.assertIn("&lt;event&gt;", message)
         self.assertIn("…and 1 more", message)
+
+    def test_planning_message_groups_consecutive_rota_shifts_of_three_or_more(self):
+        # 5 consecutive standard days: Mon 28 Sep to Fri 2 Oct
+        for day in range(28, 33):
+            self._calendar_event(
+                "Ike-standard-general medicine",
+                date(2026, 9, 28) + timedelta(days=day - 28),
+                start_time=time(9, 0),
+                end_time=time(17, 0),
+            )
+        # 3 consecutive nights: Fri 9 Oct to Sun 11 Oct
+        for day in range(3):
+            self._calendar_event(
+                "ike-night- general medicine",
+                date(2026, 10, 9) + timedelta(days=day),
+                start_time=time(20, 0),
+                end_time=time(8, 30),
+            )
+
+        message = build_planning_message(
+            period="monthly",
+            start_date=date(2026, 9, 28),
+            end_date=date(2026, 10, 26),
+        )
+
+        self.assertIn("Rota Shifts", message)
+        self.assertIn("Mon 28 Sep – Fri 2 Oct 2026 (5 days): Ike-standard-general medicine (09:00–17:00)", message)
+        self.assertIn("Fri 9 Oct – Sun 11 Oct 2026 (3 nights): ike-night- general medicine (20:00–08:30)", message)
+        # Verify it didn't list each standard day as 5 separate bullet points
+        self.assertEqual(message.count("Ike-standard-general medicine"), 1)
+        self.assertEqual(message.count("ike-night- general medicine"), 1)
+
+    def test_planning_message_keeps_standalone_shifts_obvious(self):
+        # 1 isolated long day shift
+        self._calendar_event(
+            "Ike -long day-general medicine",
+            date(2026, 10, 3),
+            start_time=time(8, 0),
+            end_time=time(20, 30),
+        )
+        # 2 standard day shifts (less than 3, so not grouped)
+        self._calendar_event(
+            "Ike-standard-general medicine",
+            date(2026, 10, 5),
+            start_time=time(9, 0),
+            end_time=time(17, 0),
+        )
+        self._calendar_event(
+            "Ike-standard-general medicine",
+            date(2026, 10, 6),
+            start_time=time(9, 0),
+            end_time=time(17, 0),
+        )
+
+        message = build_planning_message(
+            period="monthly",
+            start_date=date(2026, 9, 28),
+            end_date=date(2026, 10, 26),
+        )
+
+        self.assertIn("Sat 3 Oct 2026, 08:00–20:30 — Ike -long day-general medicine", message)
+        self.assertIn("Mon 5 Oct 2026, 09:00–17:00 — Ike-standard-general medicine", message)
+        self.assertIn("Tue 6 Oct 2026, 09:00–17:00 — Ike-standard-general medicine", message)
+
+    def test_planning_message_separates_rota_and_personal_calendar(self):
+        for day in range(3):
+            self._calendar_event(
+                "Ike-standard-general medicine",
+                date(2026, 9, 28) + timedelta(days=day),
+            )
+        self._calendar_event(
+            "Dentist appointment",
+            date(2026, 10, 1),
+            start_time=time(14, 0),
+            end_time=time(15, 0),
+        )
+
+        message = build_planning_message(
+            period="weekly",
+            start_date=date(2026, 9, 28),
+            end_date=date(2026, 10, 5),
+        )
+
+        self.assertIn("<b>Rota Shifts</b>", message)
+        self.assertIn("<b>Calendar</b>", message)
+        self.assertIn("Dentist appointment", message)
+
+    def test_planning_keyboard_has_full_calendar_button(self):
+        keyboard = planning_keyboard()
+        buttons = [btn["text"] for row in keyboard["inline_keyboard"] for btn in row]
+        self.assertIn("📅 Full Calendar", buttons)
 
 
 @override_settings(AUTHORISED_EMAIL_IKE="ike@example.com", GOOGLE_CALENDAR_ID="primary")

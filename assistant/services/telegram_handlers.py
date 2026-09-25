@@ -3,7 +3,7 @@
 import html
 import logging
 import re
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 
 from django.conf import settings
 from django.db import transaction
@@ -850,6 +850,98 @@ def _planning_title(value: str) -> str:
     return "".join(parts).rstrip() + "…"
 
 
+def _is_work_shift(item) -> bool:
+    if getattr(item, "kind", None) == "work_shift":
+        return True
+    title = (getattr(item, "title", "") or "").lower()
+    if "general medicine" in title:
+        return True
+    if any(marker in title for marker in ["standard day", "long day", "night shift", "work shift", "patchwork"]):
+        return True
+    if "ike" in title and any(marker in title for marker in ["standard", "long day", "night", "shift"]):
+        return True
+    return False
+
+
+def _format_shift_range(start_date: date, end_date: date) -> str:
+    if start_date.year == end_date.year:
+        return f"{start_date:%a} {start_date.day} {start_date:%b} – {end_date:%a} {end_date.day} {end_date:%b %Y}"
+    return f"{start_date:%a} {start_date.day} {start_date:%b %Y} – {end_date:%a} {end_date.day} {end_date:%b %Y}"
+
+
+def _group_work_shifts(shifts: list) -> list[str]:
+    """Group consecutive work shifts of the same type (>=3) into blocks.
+
+    Standalone shifts (<3) are listed individually by date.
+    Returns formatted lines in chronological order.
+    """
+    if not shifts:
+        return []
+
+    sorted_shifts = sorted(
+        shifts,
+        key=lambda s: (s.appointment_date, s.start_time or time.min, getattr(s, "object_id", 0)),
+    )
+
+    runs: list[list] = []
+    current_run: list = []
+
+    def normalize_title(t: str) -> str:
+        return " ".join((t or "").strip().split()).lower()
+
+    for shift in sorted_shifts:
+        if not current_run:
+            current_run.append(shift)
+            continue
+
+        prev = current_run[-1]
+        same_type = (
+            normalize_title(shift.title) == normalize_title(prev.title)
+            and shift.start_time == prev.start_time
+            and shift.end_time == prev.end_time
+        )
+        is_consecutive_day = shift.appointment_date == prev.appointment_date + timedelta(days=1)
+
+        if same_type and is_consecutive_day:
+            current_run.append(shift)
+        else:
+            runs.append(current_run)
+            current_run = [shift]
+
+    if current_run:
+        runs.append(current_run)
+
+    formatted_lines: list[str] = []
+    for run in runs:
+        if len(run) >= 3:
+            start_d = run[0].appointment_date
+            end_d = run[-1].appointment_date
+            count = len(run)
+            is_night = "night" in (run[0].title or "").lower()
+            unit = "nights" if is_night else "days"
+            range_str = _format_shift_range(start_d, end_d)
+
+            time_str = ""
+            if run[0].start_time and run[0].end_time:
+                time_str = f" ({run[0].start_time:%H:%M}–{run[0].end_time:%H:%M})"
+            elif run[0].start_time:
+                time_str = f" ({run[0].start_time:%H:%M})"
+
+            title_escaped = _planning_title(run[0].title)
+            formatted_lines.append(f"• {range_str} ({count} {unit}): {title_escaped}{time_str}")
+        else:
+            for shift in run:
+                time_str = shift.start_time.strftime("%H:%M") if shift.start_time else "all day"
+                if shift.end_time:
+                    time_str += f"–{shift.end_time.strftime('%H:%M')}"
+                formatted_lines.append(
+                    f"• {_planning_date_label(shift.appointment_date)}, {time_str}"
+                    f" — {_planning_title(shift.title)}"
+                )
+
+    return formatted_lines
+
+
 def build_planning_message(*, period: str, start_date: date, end_date: date) -> str:
     """Render a bounded week-ahead or month-ahead planning digest."""
     if period not in {"weekly", "monthly"}:
@@ -864,21 +956,34 @@ def build_planning_message(*, period: str, start_date: date, end_date: date) -> 
         f"<b>{_planning_date_label(start_date)} – {_planning_date_label(final_date)}</b>",
     ]
 
+    truncated_any = False
+
     def append_limited(items, formatter) -> None:
+        nonlocal truncated_any
         lines.extend(formatter(item) for item in items[:PLANNING_SECTION_LIMIT])
         if len(items) > PLANNING_SECTION_LIMIT:
+            truncated_any = True
             lines.append(f"• …and {len(items) - PLANNING_SECTION_LIMIT} more")
 
-    if events:
+    work_shifts = [e for e in events if _is_work_shift(e)]
+    calendar_events = [e for e in events if not _is_work_shift(e)]
+
+    if work_shifts:
+        lines.append("\n<b>Rota Shifts</b>")
+        shift_lines = _group_work_shifts(work_shifts)
+        append_limited(shift_lines, lambda line: line)
+
+    if calendar_events:
         lines.append("\n<b>Calendar</b>")
         append_limited(
-            events,
+            calendar_events,
             lambda event: (
                 f"• {_planning_date_label(event.appointment_date)}, "
                 f"{event.start_time.strftime('%H:%M') if event.start_time else 'all day'}"
                 f" — {_planning_title(event.title)}"
             ),
         )
+
     if tasks:
         lines.append("\n<b>Tasks due</b>")
         append_limited(
@@ -889,6 +994,7 @@ def build_planning_message(*, period: str, start_date: date, end_date: date) -> 
                 f" — {_planning_title(task.title)}"
             ),
         )
+
     if reminders:
         lines.append("\n<b>Reminders</b>")
         append_limited(
@@ -898,14 +1004,27 @@ def build_planning_message(*, period: str, start_date: date, end_date: date) -> 
                 f" — {_planning_title(reminder.title)}"
             ),
         )
-    if not events and not tasks and not reminders:
+
+    if not work_shifts and not calendar_events and not tasks and not reminders:
         lines.append(f"Nothing scheduled for the {period_label} ahead.")
+    elif truncated_any:
+        lines.append("\n<i>Tap 📅 Calendar below for the full list.</i>")
+
     return "\n".join(lines)
 
 
 def today_keyboard() -> dict:
     return _keyboard(
         [_button("✅ Open tasks", "tg:inbox:tasks:0:today"), _button("📅 Calendar", "tg:inbox:calendar:0:today")],
+        [_button("📝 Notes", "tg:inbox:notes:0:today"), _button("⏰ Reminders", "tg:inbox:reminders:0:today")],
+        [_button("➕ Add task", "tg:new:task")],
+        *_navigation_rows(HOME_CALLBACK),
+    )
+
+
+def planning_keyboard() -> dict:
+    return _keyboard(
+        [_button("📅 Full Calendar", "tg:inbox:calendar:0:today"), _button("✅ Open tasks", "tg:inbox:tasks:0:today")],
         [_button("📝 Notes", "tg:inbox:notes:0:today"), _button("⏰ Reminders", "tg:inbox:reminders:0:today")],
         [_button("➕ Add task", "tg:new:task")],
         *_navigation_rows(HOME_CALLBACK),
@@ -926,7 +1045,7 @@ def _show_planning(period: str, chat_id: int, bot: TelegramBot) -> None:
     bot.send_message(
         chat_id,
         build_planning_message(period=period, start_date=start_date, end_date=end_date),
-        reply_markup=today_keyboard(),
+        reply_markup=planning_keyboard(),
     )
 
 
