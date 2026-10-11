@@ -12,6 +12,7 @@ import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone as datetime_timezone
 from urllib.request import Request, urlopen
+from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from django.conf import settings
@@ -26,6 +27,7 @@ from .gmail import get_google_credentials
 WORK_SHIFT_FALLBACK_TITLE = "Ike work shift"
 WORK_SHIFT_DESCRIPTION = "Synced automatically from Patchwork. Edit this shift in Patchwork."
 TIME_OFF_LABEL_MARKERS = ("leave", "time off")
+GOOGLE_API_RETRIES = 5
 
 
 @dataclass(frozen=True)
@@ -269,11 +271,69 @@ def _google_event_body(shift: PatchworkShiftData) -> dict:
 
 
 def _is_google_not_found(exc: Exception) -> bool:
-    return getattr(exc, "status_code", None) == 404 or getattr(getattr(exc, "resp", None), "status", None) == 404
+    return (
+        getattr(exc, "status_code", None) in (404, 410)
+        or getattr(getattr(exc, "resp", None), "status", None) in (404, 410)
+    )
+
+
+def _list_google_events(service, calendar_id: str) -> dict[str, dict]:
+    """Read live copies once per sync, including every page of the calendar.
+
+    Do not filter by private properties: older mapped events may lack them.
+    Only IDs already owned by PatchworkShift are used for writes.
+    """
+    events: dict[str, dict] = {}
+    page_token = None
+    while True:
+        response = service.events().list(
+            calendarId=calendar_id, maxResults=2500, showDeleted=False, pageToken=page_token
+        ).execute(num_retries=GOOGLE_API_RETRIES)
+        for event in response.get("items", []):
+            if event.get("id") and event.get("status") != "cancelled":
+                events[event["id"]] = event
+        page_token = response.get("nextPageToken")
+        if not page_token:
+            return events
+
+
+def _google_time_matches(actual: dict, expected: dict) -> bool:
+    if "date" in expected:
+        return actual.get("date") == expected["date"]
+    try:
+        return datetime.fromisoformat(actual.get("dateTime", "").replace("Z", "+00:00")) == datetime.fromisoformat(
+            expected["dateTime"]
+        ) and actual.get("timeZone") == expected.get("timeZone")
+    except ValueError:
+        return False
+
+
+def _google_event_matches(event: dict, shift: PatchworkShiftData) -> bool:
+    expected = _google_event_body(shift)
+    return (
+        event.get("summary") == expected["summary"]
+        and event.get("description") == expected["description"]
+        and _google_time_matches(event.get("start", {}), expected["start"])
+        and ("end" not in expected or _google_time_matches(event.get("end", {}), expected["end"]))
+    )
 
 
 def _create_google_event(service, calendar_id: str, shift: PatchworkShiftData) -> str:
-    created = service.events().insert(calendarId=calendar_id, body=_google_event_body(shift)).execute()
+    # Keep one ID across HTTP retries. If Google accepted an insert but its
+    # response was lost, retrying must not create a second copy of the shift.
+    body = {"id": uuid4().hex, **_google_event_body(shift)}
+    try:
+        created = service.events().insert(calendarId=calendar_id, body=body).execute(
+            num_retries=GOOGLE_API_RETRIES
+        )
+    except Exception as exc:
+        if getattr(getattr(exc, "resp", None), "status", None) != 409:
+            raise
+        created = service.events().get(calendarId=calendar_id, eventId=body["id"]).execute(
+            num_retries=GOOGLE_API_RETRIES
+        )
+        if not _google_event_matches(created, shift):
+            raise RuntimeError("Google Calendar insert conflicted with an unexpected event.") from exc
     google_event_id = created.get("id", "")
     if not google_event_id:
         raise RuntimeError("Google Calendar did not return an event id for a Patchwork shift.")
@@ -284,7 +344,9 @@ def _delete_google_event(service, record: PatchworkShift) -> None:
     if not record.google_event_id or not record.calendar_id:
         return
     try:
-        service.events().delete(calendarId=record.calendar_id, eventId=record.google_event_id).execute()
+        service.events().delete(calendarId=record.calendar_id, eventId=record.google_event_id).execute(
+            num_retries=GOOGLE_API_RETRIES
+        )
     except Exception as exc:  # A manually deleted mirror is already in the desired state.
         if not _is_google_not_found(exc):
             raise
@@ -308,8 +370,9 @@ def _update_record_from_shift(
 def sync_patchwork_calendar(*, fetcher=fetch_patchwork_calendar, calendar_service=None, now=None) -> SyncResult:
     """Mirror the current Patchwork feed into the configured shared calendar.
 
-    It is safe to run repeatedly. Only a new/changed source UID results in a
-    Google write, while removed/cancelled shifts are deleted from the mirror.
+    Reconcile both the source feed and live Google copies. Missing/cancelled
+    mirrors are recreated even when Patchwork's UID and payload are unchanged.
+    Google rate limits and transient failures receive bounded backoff retries.
     """
     calendar_id = settings.GOOGLE_CALENDAR_ID
     if not calendar_id:
@@ -321,6 +384,7 @@ def sync_patchwork_calendar(*, fetcher=fetch_patchwork_calendar, calendar_servic
     )
     now = now or timezone.now()
     existing = {record.source_uid: record for record in PatchworkShift.objects.all()}
+    google_events = _list_google_events(service, calendar_id) if existing else {}
     seen_uids = {shift.uid for shift in shifts}
     suppressed_uids = _suppressed_work_shift_uids(shifts)
     created = updated = deactivated = unchanged = suppressed_count = 0
@@ -381,19 +445,22 @@ def sync_patchwork_calendar(*, fetcher=fetch_patchwork_calendar, calendar_servic
             created += 1
             continue
 
+        google_event = google_events.get(record.google_event_id) if record.calendar_id == calendar_id else None
         needs_update = (
             not record.active
             or record.suppressed
             or record.payload_hash != shift.payload_hash
             or record.calendar_id != calendar_id
             or not record.google_event_id
+            or google_event is None
+            or not _google_event_matches(google_event, shift)
         )
         if needs_update:
             try:
-                if record.google_event_id and record.calendar_id == calendar_id:
+                if google_event is not None:
                     service.events().patch(
                         calendarId=calendar_id, eventId=record.google_event_id, body=_google_event_body(shift)
-                    ).execute()
+                    ).execute(num_retries=GOOGLE_API_RETRIES)
                     google_event_id = record.google_event_id
                 else:
                     google_event_id = _create_google_event(service, calendar_id, shift)

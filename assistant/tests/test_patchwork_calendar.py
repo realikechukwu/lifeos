@@ -1,10 +1,17 @@
 from datetime import datetime
 from unittest.mock import MagicMock, patch
+from types import SimpleNamespace
 
 from django.test import TestCase, override_settings
 from django.utils import timezone
 
-from assistant.services.patchwork_calendar import fetch_patchwork_calendar, parse_patchwork_calendar, sync_patchwork_calendar
+from assistant.services.patchwork_calendar import (
+    GOOGLE_API_RETRIES,
+    _google_event_body,
+    fetch_patchwork_calendar,
+    parse_patchwork_calendar,
+    sync_patchwork_calendar,
+)
 from core.models import PatchworkShift
 
 
@@ -40,6 +47,8 @@ class PatchworkCalendarSyncTests(TestCase):
     def setUp(self):
         self.service = MagicMock()
         self.service.events.return_value.insert.return_value.execute.return_value = {"id": "google-shift-1"}
+        self.live_event = {"id": "google-shift-1", **_google_event_body(parse_patchwork_calendar(calendar_with_event())[0])}
+        self.service.events.return_value.list.return_value.execute.return_value = {"items": [self.live_event]}
         self.now = datetime(2026, 8, 9, 12, 0, tzinfo=timezone.get_current_timezone())
 
     def test_parser_supports_folded_lines_and_london_times(self):
@@ -205,3 +214,154 @@ class PatchworkCalendarSyncTests(TestCase):
             {"morning", "afternoon"},
         )
         self.assertFalse(PatchworkShift.objects.filter(suppressed=True).exists())
+
+    def test_unchanged_shift_checks_google_without_writing(self):
+        sync_patchwork_calendar(fetcher=lambda: calendar_with_event(), calendar_service=self.service)
+        self.service.reset_mock()
+
+        result = sync_patchwork_calendar(fetcher=lambda: calendar_with_event(), calendar_service=self.service)
+
+        self.assertEqual(result.unchanged, 1)
+        self.service.events.return_value.list.assert_called_once()
+        self.service.events.return_value.insert.assert_not_called()
+        self.service.events.return_value.patch.assert_not_called()
+
+    def test_missing_or_cancelled_google_copy_is_recreated_for_unchanged_source(self):
+        for items in ([], [{**self.live_event, "status": "cancelled"}]):
+            with self.subTest(items=items):
+                PatchworkShift.objects.all().delete()
+                sync_patchwork_calendar(fetcher=lambda: calendar_with_event(), calendar_service=self.service)
+                self.service.events.return_value.list.return_value.execute.return_value = {"items": items}
+                self.service.events.return_value.insert.return_value.execute.return_value = {"id": "replacement"}
+                self.service.reset_mock()
+
+                result = sync_patchwork_calendar(fetcher=lambda: calendar_with_event(), calendar_service=self.service)
+
+                self.assertEqual(result.updated, 1)
+                self.assertEqual(PatchworkShift.objects.get().google_event_id, "replacement")
+                self.service.events.return_value.insert.assert_called_once()
+                self.service.events.return_value.patch.assert_not_called()
+
+    def test_google_edit_is_repaired_even_when_source_hash_is_unchanged(self):
+        sync_patchwork_calendar(fetcher=lambda: calendar_with_event(), calendar_service=self.service)
+        self.service.events.return_value.list.return_value.execute.return_value = {
+            "items": [{**self.live_event, "summary": "Changed in Google"}]
+        }
+
+        result = sync_patchwork_calendar(fetcher=lambda: calendar_with_event(), calendar_service=self.service)
+
+        self.assertEqual(result.updated, 1)
+        self.service.events.return_value.patch.assert_called_once()
+
+    def test_google_timestamp_format_does_not_trigger_unnecessary_patch(self):
+        sync_patchwork_calendar(fetcher=lambda: calendar_with_event(), calendar_service=self.service)
+        self.live_event["start"]["dateTime"] = "2026-08-10T06:00:00Z"
+        self.live_event["end"]["dateTime"] = "2026-08-10T18:00:00Z"
+
+        result = sync_patchwork_calendar(fetcher=lambda: calendar_with_event(), calendar_service=self.service)
+
+        self.assertEqual(result.unchanged, 1)
+        self.service.events.return_value.patch.assert_not_called()
+
+    def test_live_event_on_second_page_is_not_recreated(self):
+        sync_patchwork_calendar(fetcher=lambda: calendar_with_event(), calendar_service=self.service)
+        self.service.reset_mock()
+        self.service.events.return_value.list.return_value.execute.side_effect = [
+            {"items": [], "nextPageToken": "second-page"}, {"items": [self.live_event]}
+        ]
+
+        result = sync_patchwork_calendar(fetcher=lambda: calendar_with_event(), calendar_service=self.service)
+
+        self.assertEqual(result.unchanged, 1)
+        self.assertEqual(self.service.events.return_value.list.call_count, 2)
+        self.assertEqual(self.service.events.return_value.list.call_args.kwargs["pageToken"], "second-page")
+        self.service.events.return_value.insert.assert_not_called()
+
+    def test_already_deleted_event_does_not_block_source_removal(self):
+        sync_patchwork_calendar(fetcher=lambda: calendar_with_event(), calendar_service=self.service)
+        error = RuntimeError("Resource has been deleted")
+        error.resp = SimpleNamespace(status=410)
+        self.service.events.return_value.delete.return_value.execute.side_effect = error
+
+        result = sync_patchwork_calendar(
+            fetcher=lambda: calendar_with_events(), calendar_service=self.service
+        )
+
+        self.assertEqual(result.deactivated, 1)
+        self.assertFalse(PatchworkShift.objects.get().active)
+
+    def test_event_deleted_between_list_and_patch_is_recreated(self):
+        sync_patchwork_calendar(fetcher=lambda: calendar_with_event(), calendar_service=self.service)
+        error = RuntimeError("Resource has been deleted")
+        error.resp = SimpleNamespace(status=410)
+        self.service.events.return_value.patch.return_value.execute.side_effect = error
+        self.service.events.return_value.insert.return_value.execute.return_value = {"id": "replacement"}
+
+        result = sync_patchwork_calendar(
+            fetcher=lambda: calendar_with_event(summary="Long Day"), calendar_service=self.service
+        )
+
+        self.assertEqual(result.updated, 1)
+        self.assertEqual(PatchworkShift.objects.get().google_event_id, "replacement")
+
+    def test_calendar_read_failure_leaves_existing_mapping_intact(self):
+        sync_patchwork_calendar(fetcher=lambda: calendar_with_event(), calendar_service=self.service)
+        self.service.reset_mock()
+        self.service.events.return_value.list.return_value.execute.side_effect = RuntimeError("Read failed")
+
+        with self.assertRaisesRegex(RuntimeError, "Read failed"):
+            sync_patchwork_calendar(fetcher=lambda: calendar_with_event(), calendar_service=self.service)
+
+        self.assertEqual(PatchworkShift.objects.get().google_event_id, "google-shift-1")
+        self.assertTrue(PatchworkShift.objects.get().active)
+        self.service.events.return_value.insert.assert_not_called()
+        self.service.events.return_value.delete.assert_not_called()
+
+    def test_google_calls_enable_bounded_rate_limit_retries(self):
+        sync_patchwork_calendar(fetcher=lambda: calendar_with_event(), calendar_service=self.service)
+        self.service.events.return_value.insert.return_value.execute.assert_called_with(num_retries=GOOGLE_API_RETRIES)
+        sync_patchwork_calendar(fetcher=lambda: calendar_with_event(summary="Long Day"), calendar_service=self.service)
+        self.service.events.return_value.list.return_value.execute.assert_called_with(num_retries=GOOGLE_API_RETRIES)
+        self.service.events.return_value.patch.return_value.execute.assert_called_with(num_retries=GOOGLE_API_RETRIES)
+
+    def test_recovered_copy_is_unchanged_on_next_sync(self):
+        sync_patchwork_calendar(fetcher=lambda: calendar_with_event(), calendar_service=self.service)
+        self.service.events.return_value.list.return_value.execute.return_value = {"items": []}
+        self.service.events.return_value.insert.return_value.execute.return_value = {"id": "replacement"}
+        sync_patchwork_calendar(fetcher=lambda: calendar_with_event(), calendar_service=self.service)
+        self.service.events.return_value.list.return_value.execute.return_value = {
+            "items": [{**self.live_event, "id": "replacement"}]
+        }
+        self.service.reset_mock()
+
+        result = sync_patchwork_calendar(fetcher=lambda: calendar_with_event(), calendar_service=self.service)
+
+        self.assertEqual(result.unchanged, 1)
+        self.service.events.return_value.insert.assert_not_called()
+        self.service.events.return_value.patch.assert_not_called()
+
+    def test_insert_retry_conflict_recovers_the_same_event(self):
+        error = RuntimeError("Insert already accepted")
+        error.resp = SimpleNamespace(status=409)
+        self.service.events.return_value.insert.return_value.execute.side_effect = error
+        self.service.events.return_value.get.return_value.execute.side_effect = lambda **kwargs: (
+            self.service.events.return_value.insert.call_args.kwargs["body"]
+        )
+
+        result = sync_patchwork_calendar(fetcher=lambda: calendar_with_event(), calendar_service=self.service)
+
+        self.assertEqual(result.created, 1)
+        inserted_id = self.service.events.return_value.insert.call_args.kwargs["body"]["id"]
+        self.assertEqual(PatchworkShift.objects.get().google_event_id, inserted_id)
+        self.service.events.return_value.get.assert_called_once_with(calendarId="shared-calendar", eventId=inserted_id)
+
+    def test_permission_error_is_not_treated_as_deleted_event(self):
+        sync_patchwork_calendar(fetcher=lambda: calendar_with_event(), calendar_service=self.service)
+        error = RuntimeError("Forbidden")
+        error.resp = SimpleNamespace(status=403)
+        self.service.events.return_value.delete.return_value.execute.side_effect = error
+
+        with self.assertRaisesRegex(RuntimeError, "Forbidden"):
+            sync_patchwork_calendar(fetcher=lambda: calendar_with_events(), calendar_service=self.service)
+
+        self.assertTrue(PatchworkShift.objects.get().active)

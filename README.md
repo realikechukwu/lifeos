@@ -248,6 +248,12 @@ Day — General Medicine** or **Ike — Annual leave**). Redundant work segments
 fully contained by a longer work event on the same day are suppressed, while
 adjacent shifts and leave/time-off entries remain visible. Updates and
 cancellations must be made in Patchwork, not LifeOS.
+Each sync checks the live Google copies as well as the Patchwork feed. Missing
+or cancelled Google copies are recreated for confirmed source shifts, and
+changed labels/times are reconciled even if the local source hash is unchanged.
+Already-deleted events (Google 404/410) do not stop cleanup. Google requests use
+bounded backoff retries for rate limits and transient failures; the next
+scheduled run resumes if those retries are exhausted.
 - **Tasks** (`/tasks/`) — filter by status/assignee/overdue, search, create,
   edit, mark complete, cancel. Uses plain Django `ModelForm`s; task
   completion/cancellation call the same `assistant/services/tasks.py`
