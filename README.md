@@ -203,6 +203,22 @@ experience and sending applications to third parties. Agent replies use
 streaming with a 32,000-token output allowance while preserving full cached
 history, including thinking and server-tool blocks.
 
+**Personal inbox (read-only).** With `AGENT_PERSONAL_INBOX_ENABLED=true`, the
+agent can search and read a person's own Gmail (`search_my_inbox`,
+`read_my_email`), only in a private chat or email, and never another person's.
+Connect each address once, locally (credentials are stored encrypted in the
+database `DATABASE_URL` points at):
+
+```bash
+python manage.py google_auth --account you@gmail.com --readonly
+```
+
+Then set `PERSONAL_GMAIL_IKE` (and/or `PERSONAL_GMAIL_WIFE`) to that address. The
+token carries only the `gmail.readonly` scope, so Google rejects any attempt to
+send, delete or relabel. If the Google Cloud OAuth consent screen is in
+"Testing", add the address as a test user (Testing tokens expire after 7 days);
+"In production" avoids that.
+
 ### Scheduled Telegram briefings
 
 After an authorised user has started the bot privately, LifeOS sends a daily
