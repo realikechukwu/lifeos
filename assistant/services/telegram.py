@@ -81,6 +81,13 @@ class TelegramBot:
         }
         return self.call("editMessageText", payload)
 
+    def send_chat_action(self, chat_id: int, action: str = "typing") -> dict:
+        """Show a transient status such as "typing…"; Telegram clears it after ~5s."""
+        return self.call("sendChatAction", {"chat_id": chat_id, "action": action})
+
+    def get_me(self) -> dict:
+        return self.call("getMe")
+
     def answer_callback(self, callback_query_id: str, text: str = "") -> dict:
         payload = {"callback_query_id": callback_query_id}
         if text:

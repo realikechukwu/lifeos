@@ -56,6 +56,7 @@ from .telegram_inbox import (
     update_task,
 )
 from .google_calendar import cancel_calendar_event, reschedule_calendar_event
+from assistant.agent.telegram import close_thread, enqueue_telegram_message
 
 logger = logging.getLogger(__name__)
 
@@ -527,8 +528,61 @@ def _extract_and_respond(conversation: TelegramConversation, bot: TelegramBot) -
     _prepare_current_action(conversation, bot)
 
 
-def _handle_text(
+def has_pending_request(chat: TelegramChat, user: TelegramUser) -> bool:
+    """Whether an extraction conversation or inbox edit is still waiting on this user."""
+    return (
+        TelegramConversation.objects.filter(
+            chat=chat, requested_by=user, status__in=ACTIVE_STATUSES
+        ).exists()
+        or TelegramInboxAction.objects.filter(
+            chat=chat, requested_by=user, status=TelegramInboxAction.Status.AWAITING_INPUT
+        ).exists()
+    )
+
+
+def start_extraction_conversation(
     *, chat: TelegramChat, user: TelegramUser, text: str, update_id: int, bot: TelegramBot
+) -> None:
+    """Start the confirm-before-change flow for a request (used by the agent)."""
+    conversation = _new_conversation(chat, user, text, update_id)
+    _extract_and_respond(conversation, bot)
+
+
+def _bot_identity(bot: TelegramBot) -> tuple[int | None, str]:
+    """The bot's numeric id and lowercase @username, looked up once per process."""
+    global _BOT_IDENTITY
+    if _BOT_IDENTITY is None:
+        try:
+            me = bot.get_me()
+            _BOT_IDENTITY = (me.get("id"), str(me.get("username") or "").lower())
+        except (TelegramAPIError, AttributeError):
+            return None, ""
+    return _BOT_IDENTITY
+
+
+_BOT_IDENTITY: tuple[int | None, str] | None = None
+
+
+def _addressed_text(message: dict, chat: TelegramChat, bot: TelegramBot) -> tuple[bool, str]:
+    """In groups the agent only answers messages that @mention the bot or reply
+    to it. Returns whether this message is addressed, and its text without the mention."""
+    text = str(message.get("text", "")).strip()
+    if chat.chat_type == TelegramChat.ChatType.PRIVATE:
+        return True, text
+    bot_id, username = _bot_identity(bot)
+    replied_to = (message.get("reply_to_message") or {}).get("from") or {}
+    if bot_id and replied_to.get("id") == bot_id:
+        return True, text
+    if username:
+        mention = re.compile(rf"@{re.escape(username)}\b", re.IGNORECASE)
+        if mention.search(text):
+            return True, mention.sub("", text).strip()
+    return False, text
+
+
+def _handle_text(
+    *, chat: TelegramChat, user: TelegramUser, text: str, update_id: int, bot: TelegramBot,
+    addressed: bool = True, message_id: int | None = None,
 ) -> None:
     inbox_action = TelegramInboxAction.objects.filter(
         chat=chat,
@@ -557,6 +611,12 @@ def _handle_text(
         active.save(update_fields=["transcript", "updated_at"])
         _update_incoming_body(active)
         _extract_and_respond(active, bot)
+        return
+    if settings.AGENT_ENABLED:
+        if addressed and text:
+            enqueue_telegram_message(
+                chat=chat, user=user, text=text, update_id=update_id, message_id=message_id
+            )
         return
     normalised = " ".join(text.lower().split())
     if re.search(r"\b(show|list|what|which)\b.*\b(tasks?|to[- ]?do)\b", normalised):
@@ -1413,6 +1473,10 @@ def _handle_command(
     if command == "/cancel":
         _cancel_active(chat, user, bot)
         return True
+    if command == "/new" and settings.AGENT_ENABLED:
+        close_thread(chat, user)
+        bot.send_message(chat.chat_id, "Fresh start. What can I help with?")
+        return True
     return False
 
 
@@ -2026,7 +2090,10 @@ def _handle_voice_message(
     heard = html.escape(transcript[:3500])
     bot.send_message(chat.chat_id, f"🎙 I heard: “{heard}”")
     try:
-        _handle_text(chat=chat, user=user, text=transcript, update_id=update_id, bot=bot)
+        _handle_text(
+            chat=chat, user=user, text=transcript, update_id=update_id, bot=bot,
+            message_id=message.get("message_id"),
+        )
     except Exception:
         # Preserve the webhook retry while keeping transcript-bearing SDK errors
         # out of logs and the TelegramUpdate error field.
@@ -2075,8 +2142,21 @@ def process_telegram_update(payload: dict, *, bot: TelegramBot | None = None) ->
                     command_match.group(1), command_text=text, chat=chat, user=user, bot=bot
                 )
                 if not handled and chat.authorised:
-                    _handle_text(chat=chat, user=user, text=text, update_id=update_id, bot=bot)
-            elif message.get("voice") and chat.authorised:
+                    addressed, text = (
+                        _addressed_text(message, chat, bot) if settings.AGENT_ENABLED else (True, text)
+                    )
+                    _handle_text(
+                        chat=chat, user=user, text=text, update_id=update_id, bot=bot,
+                        addressed=addressed, message_id=message.get("message_id"),
+                    )
+            elif (
+                message.get("voice") and chat.authorised
+                and (
+                    not settings.AGENT_ENABLED
+                    or _addressed_text(message, chat, bot)[0]
+                    or has_pending_request(chat, user)
+                )
+            ):
                 update.update_type = "voice_message"
                 update.save(update_fields=["update_type"])
                 _handle_voice_message(

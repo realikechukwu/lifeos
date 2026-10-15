@@ -4,6 +4,10 @@ from django.contrib import admin
 from django.utils import timezone
 
 from .models import (
+    AgentJob,
+    AgentMemory,
+    AgentMessage,
+    AgentThread,
     AuditLog,
     CalendarEventRecord,
     GoogleCredential,
@@ -542,3 +546,40 @@ class GoogleCredentialAdmin(admin.ModelAdmin):
     def has_add_permission(self, request):
         # Credentials are created only via `python manage.py google_auth`.
         return False
+
+
+class AgentMessageInline(admin.TabularInline):
+    model = AgentMessage
+    extra = 0
+    can_delete = False
+    fields = ("role", "content", "stop_reason", "input_tokens", "cache_read_tokens", "cache_creation_tokens", "output_tokens", "created_at")
+    readonly_fields = fields
+
+
+@admin.register(AgentThread)
+class AgentThreadAdmin(admin.ModelAdmin):
+    # History must stay exactly as the model saw it, so threads are read-only.
+    list_display = ("id", "channel", "role", "telegram_chat", "last_activity_at", "closed_at")
+    list_filter = ("channel", "role")
+    readonly_fields = [f.name for f in AgentThread._meta.fields]
+    inlines = [AgentMessageInline]
+
+    def has_add_permission(self, request):
+        return False
+
+
+@admin.register(AgentJob)
+class AgentJobAdmin(admin.ModelAdmin):
+    list_display = ("id", "channel", "status", "telegram_user", "attempts", "created_at", "finished_at")
+    list_filter = ("status", "channel")
+    readonly_fields = [f.name for f in AgentJob._meta.fields]
+
+    def has_add_permission(self, request):
+        return False
+
+
+@admin.register(AgentMemory)
+class AgentMemoryAdmin(admin.ModelAdmin):
+    list_display = ("role", "text", "active", "created_at")
+    list_filter = ("role", "active")
+    search_fields = ("text",)

@@ -140,6 +140,30 @@ choose the correct single-occurrence or whole-series operation in Google
 Calendar. Scheduled reminders created through Telegram continue to use the
 established Gmail reminder delivery.
 
+### Claude agent (optional)
+
+With `AGENT_ENABLED=true` and `ANTHROPIC_API_KEY` set, free-text and voice
+messages go to a Claude agent (`AGENT_MODEL`, default `claude-sonnet-5-5`)
+instead of the one-shot extractor. The webhook only queues the message; the
+`run_agent_worker` process (`deploy/systemd/lifeassistant-agent.service`) shows
+"typing…", lets Claude call tools, and replies. Buttons, commands and any
+extraction flow already in progress behave exactly as before.
+
+- **Reads:** the live shared Google Calendar (including Patchwork shifts),
+  tasks, reminders and notes.
+- **Changes:** Claude writes one complete instruction and hands it to the
+  existing confirm/edit/cancel flow, so nothing changes without a tap.
+- **Memory:** durable preferences per person (`AgentMemory`), shown to Claude
+  at the start of each conversation. A conversation idle for
+  `AGENT_THREAD_IDLE_HOURS` starts afresh; `/new` starts afresh immediately.
+- **Groups:** the agent only answers messages that @mention the bot or reply
+  to it.
+- **Cost:** the system prompt, tools and conversation history are prompt-cached
+  with a 1-hour TTL; every reply logs its token and cache usage, visible per
+  thread in Django admin under Agent threads.
+
+Leaving `AGENT_ENABLED` off keeps the original behaviour.
+
 ### Scheduled Telegram briefings
 
 After an authorised user has started the bot privately, LifeOS sends a daily
