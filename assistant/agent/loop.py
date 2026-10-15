@@ -5,6 +5,8 @@ and replayed unchanged on later turns, which keeps the prompt cache warm and
 keeps Claude's thinking blocks valid across turns.
 """
 
+import hashlib
+import json
 import logging
 from dataclasses import dataclass
 
@@ -23,7 +25,23 @@ logger = logging.getLogger(__name__)
 CACHE_CONTROL = {"type": "ephemeral", "ttl": "1h"}
 SYSTEM_BLOCKS = [{"type": "text", "text": SYSTEM_PROMPT, "cache_control": CACHE_CONTROL}]
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
+# Thinking blocks are bound to the system prompt and tools they were written
+# under. If a deploy changes those mid-thread, drop the stale blocks instead of
+# failing the request (threads are also rotated, see PROMPT_VERSION).
+THINKING_BINDING_BETA = "thinking-binding-controls-2026-08-01"
+THINKING = {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "drop_block"}}
 MAX_TOKENS = 32000
+
+
+def _prompt_version() -> str:
+    """Fingerprint of everything a thread's history is bound to."""
+    payload = json.dumps(
+        [settings.AGENT_MODEL, SYSTEM_PROMPT, ACTIVE_TOOL_DEFINITIONS], sort_keys=True
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+PROMPT_VERSION = _prompt_version()
 
 REFUSAL_REPLY = "Sorry, I can't help with that one."
 INTERRUPTED_RESULT = (
@@ -133,9 +151,9 @@ def run_turn(thread: AgentThread, ctx: ToolContext, *, client=None) -> TurnResul
             tools=ACTIVE_TOOL_DEFINITIONS,
             messages=history,
             cache_control=CACHE_CONTROL,
-            thinking={"type": "adaptive"},
+            thinking=THINKING,
             output_config={"effort": settings.AGENT_EFFORT},
-            betas=[FALLBACK_BETA],
+            betas=[FALLBACK_BETA, THINKING_BINDING_BETA],
             fallbacks="default",
         )
         if tool_rounds >= max_rounds:

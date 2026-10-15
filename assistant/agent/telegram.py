@@ -23,7 +23,7 @@ from core.models import (
 from assistant.services.telegram import TelegramAPIError, TelegramBot
 
 from .formatting import split_message, to_telegram_html
-from .loop import append_input, run_turn
+from .loop import PROMPT_VERSION, append_input, run_turn
 from .tools import ToolContext
 from .documents import send_telegram_documents, upload_context
 from .proposals import context_outcomes, send_cards
@@ -77,7 +77,7 @@ def _thread_for(chat: TelegramChat, user: TelegramUser) -> AgentThread:
         .first()
     )
     idle_limit = timedelta(hours=settings.AGENT_THREAD_IDLE_HOURS)
-    if thread and now - thread.last_activity_at > idle_limit:
+    if thread and (now - thread.last_activity_at > idle_limit or thread.prompt_version != PROMPT_VERSION):
         thread.closed_at = now
         thread.save(update_fields=["closed_at"])
         thread = None
@@ -88,6 +88,7 @@ def _thread_for(chat: TelegramChat, user: TelegramUser) -> AgentThread:
             telegram_chat=chat,
             telegram_user=user,
             last_activity_at=now,
+            prompt_version=PROMPT_VERSION,
         )
     return thread
 

@@ -696,6 +696,9 @@ class AgentThread(models.Model):
     channel = models.CharField(max_length=20, choices=Channel.choices)
     role = models.CharField(max_length=20, choices=HouseholdMember.Role.choices)
     email_thread_id = models.CharField(max_length=64, unique=True, null=True, blank=True)
+    # The system prompt + tools + model fingerprint the history was written
+    # under; a Telegram thread with an older version is closed, not replayed.
+    prompt_version = models.CharField(max_length=16, blank=True, default="")
     telegram_chat = models.ForeignKey(
         TelegramChat, on_delete=models.CASCADE, null=True, blank=True, related_name="agent_threads"
     )

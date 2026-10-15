@@ -297,6 +297,28 @@ class AgentWorkerTests(TestCase):
         self.assertEqual(AgentThread.objects.filter(closed_at__isnull=True).count(), 1)
         self.assertEqual(len(client.calls[0]["messages"]), 2)
 
+    def test_thread_from_older_prompt_version_is_replaced(self):
+        # A deploy that changes the system prompt or tools must not replay the
+        # old history: its thinking blocks are bound to the old prefix.
+        self._queue(41, "Hi")
+        self._run(FakeClient(reply(text("Hello!"))))
+        AgentThread.objects.update(prompt_version="older-deploy")
+        self._queue(42, "Add the gym on Saturday")
+        client = FakeClient(reply(text("Sure.")))
+        self._run(client)
+
+        from assistant.agent.loop import PROMPT_VERSION
+
+        self.assertEqual(AgentThread.objects.count(), 2)
+        current = AgentThread.objects.get(closed_at__isnull=True)
+        self.assertEqual(current.prompt_version, PROMPT_VERSION)
+        self.assertEqual(len(client.calls[0]["messages"]), 2)
+        self.assertEqual(
+            client.calls[0]["thinking"],
+            {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "drop_block"}},
+        )
+        self.assertIn("thinking-binding-controls-2026-08-01", client.calls[0]["betas"])
+
     def test_quick_messages_are_answered_as_one_turn(self):
         self._queue(25, "Dentist next week")
         self._queue(26, "actually make that Tuesday")
