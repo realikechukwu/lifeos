@@ -543,7 +543,7 @@ def has_pending_request(chat: TelegramChat, user: TelegramUser) -> bool:
 def start_extraction_conversation(
     *, chat: TelegramChat, user: TelegramUser, text: str, update_id: int, bot: TelegramBot
 ) -> None:
-    """Start the confirm-before-change flow for a request (used by the agent)."""
+    """Start the legacy confirm-before-change extraction flow."""
     conversation = _new_conversation(chat, user, text, update_id)
     _extract_and_respond(conversation, bot)
 
@@ -1601,6 +1601,10 @@ def _handle_navigation(
 
 
 def _handle_callback(data: str, chat: TelegramChat, user: TelegramUser, bot: TelegramBot) -> None:
+    if data.startswith("ag:"):
+        from assistant.agent.proposals import handle_callback
+        handle_callback(data, chat, user, bot)
+        return
     callback_parts = data.split(":")
     parts = data.split(":", 3)
     if len(parts) < 3 or parts[0] != "tg":

@@ -791,3 +791,50 @@ class AgentMemory(models.Model):
 
     def __str__(self):
         return f"{self.role}: {self.text[:60]}"
+
+
+class AgentProposal(models.Model):
+    class Kind(models.TextChoices):
+        CREATE_EVENT = "create_event", "Create event"
+        CREATE_TASK = "create_task", "Create task"
+        CREATE_NOTE = "create_note", "Create note"
+        CREATE_REMINDER = "create_reminder", "Create reminder"
+        COMPLETE_TASK = "complete_task", "Complete task"
+        UPDATE_TASK = "update_task", "Update task"
+        RESCHEDULE_EVENT = "reschedule_event", "Reschedule event"
+        CANCEL_EVENT = "cancel_event", "Cancel event"
+        CANCEL_REMINDER = "cancel_reminder", "Cancel reminder"
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        CONFIRMED = "confirmed", "Confirmed"
+        CANCELLED = "cancelled", "Cancelled"
+        SUPERSEDED = "superseded", "Superseded"
+        EXPIRED = "expired", "Expired"
+        FAILED = "failed", "Failed"
+
+    thread = models.ForeignKey(AgentThread, on_delete=models.CASCADE, related_name="proposals")
+    role = models.CharField(max_length=20, choices=HouseholdMember.Role.choices)
+    telegram_chat = models.ForeignKey(TelegramChat, on_delete=models.CASCADE, null=True, blank=True)
+    telegram_user = models.ForeignKey(TelegramUser, on_delete=models.PROTECT, null=True, blank=True)
+    kind = models.CharField(max_length=30, choices=Kind.choices)
+    payload = models.JSONField(default=dict)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    result = models.JSONField(default=dict, blank=True)
+    telegram_message_id = models.BigIntegerField(null=True, blank=True)
+    replaces = models.ForeignKey("self", on_delete=models.SET_NULL, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    decided_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["id"]
+
+
+class AgentOutcome(models.Model):
+    thread = models.ForeignKey(AgentThread, on_delete=models.CASCADE, related_name="outcomes")
+    text = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    delivered_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["id"]

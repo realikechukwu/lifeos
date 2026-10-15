@@ -221,6 +221,7 @@ TELEGRAM_MAX_CLARIFICATIONS = _int_env("TELEGRAM_MAX_CLARIFICATIONS", 4)
 # original extraction flow exactly as before.
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 AGENT_ENABLED = _bool_env("AGENT_ENABLED", False)
+AGENT_PROPOSALS_ENABLED = _bool_env("AGENT_PROPOSALS_ENABLED", False)
 AGENT_MODEL = os.environ.get("AGENT_MODEL", "claude-sonnet-5-5")
 AGENT_EFFORT = os.environ.get("AGENT_EFFORT", "medium")
 AGENT_MAX_TOOL_ROUNDS = _int_env("AGENT_MAX_TOOL_ROUNDS", 12)

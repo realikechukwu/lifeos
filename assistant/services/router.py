@@ -295,8 +295,12 @@ def admin_approve_and_execute(parsed_action: ParsedAction) -> tuple[str, dict]:
     if action_type == ACTION_TYPE.CREATE_CALENDAR_EVENT:
         calendar_event = create_event_for_parsed_action(parsed_action)
         parsed_action.refresh_from_db()
-        outcome = "created" if parsed_action.status == ParsedAction.Status.EXECUTED else "pending_review"
-        return outcome, {"calendar_event": calendar_event}
+        if parsed_action.status != ParsedAction.Status.EXECUTED:
+            return "pending_review", {"calendar_event": calendar_event}
+        reminder_result, extra = _maybe_create_linked_reminder(parsed_action, calendar_event)
+        extra["calendar_event"] = calendar_event
+        outcome = {"created": "created_with_reminder", "unclear": "created_reminder_unclear"}.get(reminder_result, "created")
+        return outcome, extra
 
     if action_type == ACTION_TYPE.CREATE_TASK:
         return "task_created", {"task": create_task_for_parsed_action(parsed_action)}

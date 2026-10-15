@@ -151,8 +151,12 @@ extraction flow already in progress behave exactly as before.
 
 - **Reads:** the live shared Google Calendar (including Patchwork shifts),
   tasks, reminders and notes.
-- **Changes:** Claude writes one complete instruction and hands it to the
-  existing confirm/edit/cancel flow, so nothing changes without a tap.
+- **Changes:** with `AGENT_PROPOSALS_ENABLED=true`, Claude proposes validated
+  changes using native Confirm/Cancel cards (one per item). Only the requesting
+  user can decide; cards expire after 24 hours. Corrections replace old cards.
+  Changes reuse the existing action services and outcomes reach the next turn.
+  With the flag off, the agent can read records but cannot propose changes.
+  Existing legacy extraction conversations and inbox actions still work.
 - **Memory:** durable preferences per person (`AgentMemory`), shown to Claude
   at the start of each conversation. A conversation idle for
   `AGENT_THREAD_IDLE_HOURS` starts afresh; `/new` starts afresh immediately.

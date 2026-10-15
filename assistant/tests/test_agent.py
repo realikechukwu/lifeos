@@ -404,62 +404,6 @@ class AgentWorkerTests(TestCase):
         self.assertTrue(wife_memory.active)
         self.assertTrue(client.calls[1]["messages"][-1]["content"][0]["is_error"])
 
-    @patch("assistant.services.telegram_handlers.start_extraction_conversation")
-    def test_request_change_starts_the_confirmation_flow_once(self, start):
-        self._queue(37, "Add dinner with Chidi on Friday at 19:30")
-        instruction = "Add event: Dinner with Chidi, Friday 16 October 2026 19:30-21:00."
-        client = FakeClient(
-            reply(
-                tool_use("request_change", {"instruction": instruction}, "toolu_a"),
-                tool_use("request_change", {"instruction": instruction}, "toolu_b"),
-                stop_reason="tool_use",
-            ),
-            reply(text("Card's up.")),
-        )
-        self._run(client)
-
-        start.assert_called_once()
-        self.assertEqual(start.call_args.kwargs["text"], instruction)
-        self.assertEqual(start.call_args.kwargs["update_id"], 37)
-        results = client.calls[1]["messages"][-1]["content"]
-        self.assertNotIn("is_error", results[0])
-        self.assertTrue(results[1]["is_error"])
-
-    def test_request_change_creates_a_real_pending_card(self):
-        self._queue(38, "Remind me to renew insurance")
-        from assistant.services.extractor import AssistantAction
-
-        action = AssistantAction(
-            action_type="create_task", title="Renew insurance", assigned_to="ike", confidence=0.95,
-        )
-        client = FakeClient(
-            reply(tool_use("request_change", {"instruction": "Create a task for Ike: renew insurance."}), stop_reason="tool_use"),
-            reply(text("")),
-        )
-        with patch("assistant.services.telegram_handlers.extract_telegram_action", return_value=[action]):
-            self._run(client)
-
-        conversation = TelegramConversation.objects.get()
-        self.assertEqual(conversation.status, TelegramConversation.Status.AWAITING_CONFIRMATION)
-        self.assertEqual(IncomingEmail.objects.get().gmail_message_id, "telegram:38")
-        self.assertFalse(Task.objects.exists())
-
-    def test_pending_card_blocks_a_second_request(self):
-        self._queue(39, "Add another")
-        job = AgentJob.objects.get()
-        conversation_email = IncomingEmail.objects.create(gmail_message_id="telegram:1", body_text="x")
-        TelegramConversation.objects.create(
-            chat=job.telegram_chat, requested_by=job.telegram_user, incoming_email=conversation_email,
-            status=TelegramConversation.Status.AWAITING_CONFIRMATION,
-        )
-        client = FakeClient(
-            reply(tool_use("request_change", {"instruction": "Add task X"}), stop_reason="tool_use"),
-            reply(text("Please confirm the first one.")),
-        )
-        self._run(client)
-        result = client.calls[1]["messages"][-1]["content"][0]
-        self.assertIn("already a confirmation card", result["content"])
-
     @patch("assistant.agent.tools.list_calendar_events", side_effect=RuntimeError("no creds"))
     def test_calendar_falls_back_to_lifeos_records(self, _list_events):
         self._queue(40, "This week?")

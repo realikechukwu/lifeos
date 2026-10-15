@@ -452,6 +452,21 @@ restart it. Then set `ANTHROPIC_API_KEY` and `AGENT_ENABLED=true` in `.env` and
 restart both `lifeassistant-web` and `lifeassistant-agent`. Logs:
 `sudo journalctl -u lifeassistant-agent -f`.
 
+### Native agent proposals (phase 2)
+
+After deploying the reviewed branch through the usual dependency/migration
+steps, add `AGENT_PROPOSALS_ENABLED=true` to the same environment file used
+by web and worker (keep `AGENT_ENABLED=true` and `ANTHROPIC_API_KEY`). Restart:
+
+```bash
+sudo systemctl restart lifeassistant-web lifeassistant-agent
+```
+
+Migration `0013_agent_proposals` adds proposals and undelivered outcome records.
+There are no new packages. Leave the flag false to disable native changes.
+Uncertain executions are recorded and never automatically retried; inspect
+AgentProposal.result and AuditLog before attempting a new proposal.
+
 ## 20. Running the first live email test
 
 1. Authenticate the assistant Google account **against production data**:

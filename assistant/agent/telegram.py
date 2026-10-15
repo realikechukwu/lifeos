@@ -12,6 +12,7 @@ from django.utils import timezone
 from core.models import (
     AgentJob,
     AgentMemory,
+    AgentOutcome,
     AgentMessage,
     AgentThread,
     HouseholdMember,
@@ -24,6 +25,7 @@ from assistant.services.telegram import TelegramAPIError, TelegramBot
 from .formatting import split_message, to_telegram_html
 from .loop import append_input, run_turn
 from .tools import ToolContext
+from .proposals import context_outcomes, send_cards
 
 logger = logging.getLogger(__name__)
 
@@ -163,16 +165,19 @@ def process_telegram_jobs(jobs: list[AgentJob], *, bot: TelegramBot | None = Non
         thread = _thread_for(chat, user)
         first_turn = not thread.messages.exists()
         text = "\n\n".join(j.text for j in jobs if j.text.strip())
+        outcome_note, outcome_ids = context_outcomes(thread)
         append_input(thread, [
             {"role": AgentMessage.Role.USER, "content": [{"type": "text", "text": text}]},
             {
                 "role": AgentMessage.Role.SYSTEM,
-                "content": build_context_note(thread=thread, chat=chat, user=user, first_turn=first_turn),
+                "content": build_context_note(thread=thread, chat=chat, user=user, first_turn=first_turn) + ("\n" + outcome_note if outcome_note else ""),
             },
         ])
+        AgentOutcome.objects.filter(id__in=outcome_ids).update(delivered_at=timezone.now())
         AgentJob.objects.filter(id__in=[j.id for j in jobs]).update(thread=thread)
     ctx = ToolContext(
         role=user.role,
+        thread=thread,
         speaker_name=speaker_name(user),
         telegram_chat=chat,
         telegram_user=user,
@@ -183,6 +188,7 @@ def process_telegram_jobs(jobs: list[AgentJob], *, bot: TelegramBot | None = Non
         result = run_turn(thread, ctx, client=client)
     if result.text:
         _send_reply(bot, job, result.text)
+    send_cards(thread, bot)
 
 
 def notify_failure(job: AgentJob, *, bot: TelegramBot | None = None) -> None:

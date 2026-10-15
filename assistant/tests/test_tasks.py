@@ -1,4 +1,6 @@
-from datetime import date
+from datetime import date, timedelta
+
+from django.utils import timezone
 
 from django.test import TestCase, override_settings
 
@@ -23,7 +25,7 @@ class DirectTaskCommandTests(TestCase):
             incoming_email=email,
             action_type=ParsedAction.ActionType.CREATE_TASK,
             title="Renew home insurance",
-            due_date=date(2026, 9, 30),
+            due_date=timezone.localdate() + timedelta(days=14),
             assigned_to=AssignedTo.IKE,
             confidence=0.95,
         )
@@ -40,7 +42,7 @@ class DirectTaskCommandTests(TestCase):
         task = extra["task"]
         self.assertEqual(task.title, "Renew home insurance")
         self.assertEqual(task.assigned_to, AssignedTo.IKE)
-        self.assertEqual(task.due_date, date(2026, 9, 30))
+        self.assertEqual(task.due_date, timezone.localdate() + timedelta(days=14))
         self.assertEqual(task.status, Task.Status.OPEN)
         self.assertEqual(task.source_email_id, email.id)
         parsed_action.refresh_from_db()

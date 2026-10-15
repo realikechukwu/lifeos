@@ -15,7 +15,8 @@ from datetime import date, timedelta
 
 from django.db.models import Q
 
-from core.models import AgentMemory, Note, Reminder, Task, TelegramChat, TelegramUser
+from core.models import AgentMemory, AgentThread, Note, Reminder, Task, TelegramChat, TelegramUser
+from .proposals import ToolInputError, HANDLERS as PROPOSAL_HANDLERS, tool_definitions
 
 from assistant.services.google_calendar import list_calendar_events
 from assistant.services.telegram_inbox import calendar_items_between
@@ -26,10 +27,6 @@ MAX_CALENDAR_DAYS = 120
 MAX_ACTIVE_MEMORIES = 100
 
 
-class ToolInputError(ValueError):
-    """The model sent unusable input; the message is shown back to it."""
-
-
 @dataclass
 class ToolContext:
     role: str
@@ -38,8 +35,7 @@ class ToolContext:
     telegram_user: TelegramUser | None = None
     telegram_update_id: int | None = None
     bot: object | None = None
-    # Set once request_change has started a confirmation flow this turn.
-    change_requested: bool = False
+    thread: AgentThread | None = None
     events: list[str] = field(default_factory=list)
 
 
@@ -76,6 +72,7 @@ def get_calendar(ctx: ToolContext, args: dict) -> str:
                 "LifeOS created and imported work shifts. Say so if it matters.",
         "events": [
             {
+                "lifeos_event_id": item.object_id if item.kind == "calendar_event" else None,
                 "title": item.title,
                 "date": item.appointment_date,
                 "start_time": item.start_time,
@@ -169,43 +166,6 @@ def forget(ctx: ToolContext, args: dict) -> str:
     return _dumps({"forgotten": True})
 
 
-def request_change(ctx: ToolContext, args: dict) -> str:
-    instruction = str(args.get("instruction") or "").strip()
-    if not instruction:
-        raise ToolInputError("instruction must describe the change.")
-    if ctx.change_requested:
-        raise ToolInputError(
-            "A change was already requested this turn. Everything must go in one instruction."
-        )
-    if ctx.telegram_chat is None or ctx.telegram_user is None or ctx.telegram_update_id is None:
-        raise ToolInputError("Changes can only be requested from Telegram.")
-
-    # Imported here: telegram_handlers imports the agent package for routing.
-    from assistant.services.telegram_handlers import (
-        has_pending_request,
-        start_extraction_conversation,
-    )
-
-    if has_pending_request(ctx.telegram_chat, ctx.telegram_user):
-        raise ToolInputError(
-            "There is already a confirmation card waiting in this chat. Ask the speaker to "
-            "confirm or cancel it first."
-        )
-    start_extraction_conversation(
-        chat=ctx.telegram_chat,
-        user=ctx.telegram_user,
-        text=instruction[:4000],
-        update_id=ctx.telegram_update_id,
-        bot=ctx.bot,
-    )
-    ctx.change_requested = True
-    ctx.events.append("change_requested")
-    return _dumps({
-        "status": "confirmation_card_shown",
-        "detail": "The speaker now sees a card to confirm, edit or cancel. Nothing has changed yet.",
-    })
-
-
 _DATE = {"type": "string", "description": "A date in YYYY-MM-DD form."}
 
 _DEFINITIONS = [
@@ -271,28 +231,6 @@ _DEFINITIONS = [
         },
     },
     {
-        "name": "request_change",
-        "description": (
-            "Start LifeOS's confirmation flow for adding or changing household records: "
-            "calendar events, tasks, notes, reminders, or completing a task. Call at most "
-            "once per turn with every requested change in one complete instruction."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "instruction": {
-                    "type": "string",
-                    "description": (
-                        "A complete, unambiguous instruction with absolute dates, 24-hour "
-                        "times, who it is for and any reminder."
-                    ),
-                },
-            },
-            "required": ["instruction"],
-            "additionalProperties": False,
-        },
-    },
-    {
         "name": "search_notes",
         "description": (
             "Search LifeOS notes by text in the title or body; an empty query returns the "
@@ -307,7 +245,7 @@ _DEFINITIONS = [
     },
 ]
 
-TOOL_DEFINITIONS = sorted(_DEFINITIONS, key=lambda tool: tool["name"])
+TOOL_DEFINITIONS = sorted(_DEFINITIONS + tool_definitions(), key=lambda tool: tool["name"])
 
 HANDLERS = {
     "forget": forget,
@@ -315,6 +253,7 @@ HANDLERS = {
     "list_reminders": list_reminders,
     "list_tasks": list_tasks,
     "remember": remember,
-    "request_change": request_change,
+    **{name: (lambda ctx, args, handler=handler: _dumps(handler(ctx, args)))
+       for name, handler in PROPOSAL_HANDLERS.items()},
     "search_notes": search_notes,
 }
