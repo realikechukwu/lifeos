@@ -177,7 +177,7 @@ class DocumentAgentTests(TestCase):
         self.assertEqual(self.bot.messages[-1][1], "Your CV is ready.")
         self.bot.send_document.assert_called_once()
         self.assertEqual(client.calls[0]["max_tokens"], 32000)
-        self.assertEqual(client.calls[0]["thinking"], {"type": "adaptive"})
+        self.assertEqual(client.calls[0]["thinking"], {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "drop_block"}})
         for key in ["temperature", "top_p", "top_k", "budget_tokens"]:
             self.assertNotIn(key, client.calls[0])
 
@@ -314,5 +314,5 @@ class WebStreamingTests(TestCase):
         self.assertEqual(first["system"], second["system"])
         self.assertEqual(first["tools"], second["tools"])
         self.assertEqual(first["cache_control"], {"type": "ephemeral", "ttl": "1h"})
-        self.assertEqual(first["betas"], ["server-side-fallback-2026-07-01"])
+        self.assertEqual(first["betas"], ["server-side-fallback-2026-07-01", "thinking-binding-controls-2026-08-01"])
         self.assertEqual(first["fallbacks"], "default")

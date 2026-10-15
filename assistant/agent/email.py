@@ -9,7 +9,7 @@ from core.models import AgentJob, AgentMemory, AgentOutcome, AgentThread, Househ
 from assistant.services.email_parser import split_new_instruction_and_forward
 from assistant.services.email_sender import _resolve_confirmation_cc
 from assistant.services.gmail import GmailService, is_authorised_sender
-from .loop import append_input, run_turn
+from .loop import PROMPT_VERSION, append_input, run_turn
 from .proposals import context_outcomes, summary
 from .tools import ToolContext
 from .documents import DOCX_MIME, PDF_MIME, add_upload, attachments_for_job, upload_context
@@ -127,7 +127,7 @@ def process_email_job(job, *, client=None, gmail_service=None):
         with transaction.atomic():
             thread, _ = AgentThread.objects.get_or_create(
                 email_thread_id=incoming.gmail_thread_id or incoming.gmail_message_id,
-                defaults={"channel": "email", "role": role, "last_activity_at": timezone.now()},
+                defaults={"channel": "email", "role": role, "last_activity_at": timezone.now(), "prompt_version": PROMPT_VERSION},
             )
             outcomes, ids = context_outcomes(thread)
             append_input(thread, [
