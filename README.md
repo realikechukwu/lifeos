@@ -151,8 +151,12 @@ extraction flow already in progress behave exactly as before.
 
 - **Reads:** the live shared Google Calendar (including Patchwork shifts),
   tasks, reminders and notes.
-- **Changes:** Claude writes one complete instruction and hands it to the
-  existing confirm/edit/cancel flow, so nothing changes without a tap.
+- **Changes:** with `AGENT_PROPOSALS_ENABLED=true`, Claude proposes validated
+  changes using native Confirm/Cancel cards (one per item). Only the requesting
+  user can decide; cards expire after 24 hours. Corrections replace old cards.
+  Changes reuse the existing action services and outcomes reach the next turn.
+  With the flag off, the agent can read records but cannot propose changes.
+  Existing legacy extraction conversations and inbox actions still work.
 - **Memory:** durable preferences per person (`AgentMemory`), shown to Claude
   at the start of each conversation. A conversation idle for
   `AGENT_THREAD_IDLE_HOURS` starts afresh; `/new` starts afresh immediately.
@@ -162,7 +166,42 @@ extraction flow already in progress behave exactly as before.
   with a 1-hour TTL; every reply logs its token and cache usage, visible per
   thread in Django admin under Agent threads.
 
-Leaving `AGENT_ENABLED` off keeps the original behaviour.
+Leaving `AGENT_ENABLED` off keeps the original Telegram behaviour.
+
+Set `AGENT_EMAIL_ENABLED=true` to route authorised emails from either adult to
+this worker, continuing one conversation per Gmail thread. Leave it false for
+the original extractor. With `AGENT_PROPOSALS_ENABLED=true`, clear creates and
+task completions execute immediately, as with the original email assistant.
+Task updates, reschedules and cancellations require a later reply of `YES`
+(or `YES <proposal id>` when several are pending), from the requesting person.
+Forwarded/quoted text is labelled as untrusted data. The worker passes PDF,
+JPEG and PNG attachments to Claude within a combined 10 MB allowance; other
+files are mentioned by name. Replies go to the outer sender, with optional CC
+restricted to the other configured household address. Automated/list mail and
+mail from the assistant itself cannot start an agent conversation.
+
+With `AGENT_DOCUMENTS_ENABLED=true`, send a PDF or DOCX (up to 10 MB) in a
+private Telegram chat, or attach one to an agent email. Ask LifeOS to save it
+as your CV, cover letter or experience document. The saved text comes directly
+from the uploaded file and belongs to your household role. Scanned PDFs need
+a text version; extraction supports unencrypted PDFs up to 200 pages and
+DOCX files up to 25 MB expanded, with at most 200,000 extracted characters.
+
+The agent can tailor a CV against a job advert using saved facts, generate a
+Word document with headings, bullets and bold, and deliver or resend it in the
+current channel. Generated files and source text stay in private database
+records; no public media URL is created. `email_me` sends drafts and optional
+generated files only to the speaker's configured authorised address, limited
+to ten emails per person per local day (uncertain sends count).
+
+Set `AGENT_WEB_ENABLED=true` and restart the worker to enable Anthropic's web
+search and fetch tools, each capped at five uses per API call. This flag is
+read at process startup so every request in that worker keeps the same sorted
+tool list; disabled workers omit the remote tools entirely. Search results
+and job adverts are treated as untrusted data. CV guidance prohibits invented
+experience and sending applications to third parties. Agent replies use
+streaming with a 32,000-token output allowance while preserving full cached
+history, including thinking and server-tool blocks.
 
 ### Scheduled Telegram briefings
 
@@ -356,6 +395,6 @@ change touches the corresponding external integration or deployment path.
 
 ## Out of scope so far
 
-Attachment parsing, Celery/Redis/Docker, drag-and-drop calendar editing,
+OCR, Celery/Redis/Docker, drag-and-drop calendar editing,
 public self-service registration, a mobile app, and any new assistant
 capability beyond what Phase 1/2 already built.

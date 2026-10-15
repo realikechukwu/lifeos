@@ -5,6 +5,10 @@ from django.utils import timezone
 
 from .models import (
     AgentJob,
+    AgentProposal,
+    AgentUpload,
+    GeneratedDocument,
+    ProfileDocument,
     AgentMemory,
     AgentMessage,
     AgentThread,
@@ -583,3 +587,49 @@ class AgentMemoryAdmin(admin.ModelAdmin):
     list_display = ("role", "text", "active", "created_at")
     list_filter = ("role", "active")
     search_fields = ("text",)
+
+
+class AgentReadOnlyAdmin(admin.ModelAdmin):
+    def get_readonly_fields(self, request, obj=None):
+        return [f.name for f in self.model._meta.fields if f.name not in self.exclude]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    exclude = ()
+
+
+@admin.register(AgentProposal)
+class AgentProposalAdmin(AgentReadOnlyAdmin):
+    list_display = ("id", "role", "kind", "status", "created_at", "decided_at")
+    list_filter = ("role", "kind", "status")
+
+
+@admin.register(AgentUpload)
+class AgentUploadAdmin(AgentReadOnlyAdmin):
+    list_display = ("id", "role", "filename", "created_at")
+    list_filter = ("role",)
+
+
+@admin.register(GeneratedDocument)
+class GeneratedDocumentAdmin(AgentReadOnlyAdmin):
+    list_display = ("id", "role", "title", "created_at")
+    list_filter = ("role",)
+    exclude = ("data",)
+
+
+@admin.register(ProfileDocument)
+class ProfileDocumentAdmin(AgentReadOnlyAdmin):
+    list_display = ("id", "role", "title", "kind", "active", "updated_at")
+    list_filter = ("role", "kind", "active")
+
+    def get_readonly_fields(self, request, obj=None):
+        return [name for name in super().get_readonly_fields(request, obj) if name != "active"]
+
+    def save_model(self, request, obj, form, change):
+        super().save_model(request, obj, form, change)
+        AuditLog.objects.create(action="agent_profile_active_changed", object_type="ProfileDocument",
+                                object_id=str(obj.pk), details={"active": obj.active})

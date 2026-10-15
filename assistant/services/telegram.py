@@ -6,6 +6,8 @@ token in that URL.
 """
 
 import json
+import re
+import uuid
 from pathlib import PurePosixPath
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -80,6 +82,30 @@ class TelegramBot:
             "reply_markup": reply_markup or {"inline_keyboard": []},
         }
         return self.call("editMessageText", payload)
+
+    def send_document(self, chat_id: int, *, filename: str, data: bytes) -> dict:
+        """Upload a private generated file without exposing a server file path."""
+        if not data or len(data) > 10 * 1024 * 1024:
+            raise TelegramAPIError("The generated document exceeds the upload limit.")
+        filename = re.sub(r"[^a-zA-Z0-9_.-]", "_", filename)[:150] or "document.docx"
+        boundary = "lifeos-" + uuid.uuid4().hex
+        chunks = [
+            f'--{boundary}\r\nContent-Disposition: form-data; name="chat_id"\r\n\r\n{chat_id}\r\n'.encode(),
+            f'--{boundary}\r\nContent-Disposition: form-data; name="document"; filename="{filename}"\r\nContent-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.document\r\n\r\n'.encode(),
+            data, f"\r\n--{boundary}--\r\n".encode(),
+        ]
+        request = Request(
+            f"https://api.telegram.org/bot{self.token}/sendDocument", data=b"".join(chunks),
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"}, method="POST",
+        )
+        try:
+            with urlopen(request, timeout=30) as response:
+                result = json.loads(response.read().decode("utf-8"))
+        except (HTTPError, URLError, TimeoutError, OSError, json.JSONDecodeError):
+            raise TelegramAPIError("Telegram document upload failed.") from None
+        if not result.get("ok"):
+            raise TelegramAPIError("Telegram rejected the document upload.")
+        return result.get("result", {})
 
     def send_chat_action(self, chat_id: int, action: str = "typing") -> dict:
         """Show a transient status such as "typing…"; Telegram clears it after ~5s."""

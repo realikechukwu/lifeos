@@ -83,12 +83,26 @@ class FakeMessages:
         self.responses = list(responses)
         self.calls = []
 
-    def create(self, **kwargs):
+    def stream(self, **kwargs):
         self.calls.append(copy.deepcopy(kwargs))
         response = self.responses.pop(0)
         if isinstance(response, Exception):
             raise response
-        return response
+        return FakeStream(response)
+
+
+class FakeStream:
+    def __init__(self, response):
+        self.response = response
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def get_final_message(self):
+        return self.response
 
 
 class FakeClient:
@@ -313,6 +327,28 @@ class AgentWorkerTests(TestCase):
         self.assertEqual(len(client.calls[0]["messages"]), 2)
         self.assertEqual(AgentJob.objects.get().status, AgentJob.Status.DONE)
 
+    def test_batched_transient_retry_keeps_one_turn(self):
+        self._queue(45, "First message")
+        self._queue(46, "Second message")
+        self._run(FakeClient(server_error()))
+        self.assertEqual(AgentJob.objects.filter(status="queued").count(), 2)
+        AgentJob.objects.update(started_at=timezone.now() - timedelta(minutes=1))
+        client = FakeClient(reply(text("One reply.")))
+        retried = self._run(client)
+        self.assertEqual(len(retried), 2)
+        self.assertEqual(len(client.calls[0]["messages"]), 2)
+        self.assertEqual(AgentJob.objects.filter(status="done").count(), 2)
+        self.assertEqual(len(self.bot.messages), 1)
+
+    def test_follow_up_after_failed_turn_keeps_system_message_order_valid(self):
+        self._queue(47, "First")
+        self._run(FakeClient(ValueError("failed before response")))
+        self._queue(48, "Try another question")
+        client = FakeClient(reply(text("Hello.")))
+        self._run(client)
+        roles = [m["role"] for m in client.calls[0]["messages"]]
+        self.assertEqual(roles, ["user", "system", "assistant", "user", "system"])
+
     def test_permanent_failure_tells_the_user(self):
         self._queue(28, "Hello")
         request = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
@@ -343,6 +379,24 @@ class AgentWorkerTests(TestCase):
         last_sent = client.calls[0]["messages"][-1]
         self.assertEqual(last_sent["content"][0]["content"], INTERRUPTED_RESULT)
         self.assertTrue(last_sent["content"][0]["is_error"])
+
+    def test_interrupted_write_recovery_disables_further_tools(self):
+        self._queue(49, "Add a task")
+        job = claim_next_jobs()[0]
+        thread = AgentThread.objects.create(
+            channel="telegram", role="ike", telegram_chat=job.telegram_chat,
+            telegram_user=job.telegram_user, last_activity_at=timezone.now(),
+        )
+        AgentMessage.objects.create(thread=thread, role="user", content=[text("Add a task")])
+        AgentMessage.objects.create(thread=thread, role="system", content="context")
+        AgentMessage.objects.create(thread=thread, role="assistant", content=[tool_use("propose_task", {"title": "A"})])
+        AgentJob.objects.filter(pk=job.pk).update(thread=thread)
+        job.refresh_from_db()
+        client = FakeClient(reply(text("The earlier change may have run; please check before retrying.")))
+        run_jobs([job], bot=self.bot, client=client)
+        self.assertEqual(client.calls[0]["tool_choice"], {"type": "none"})
+        self.assertIn("may already have run", client.calls[0]["messages"][-1]["content"][0]["content"])
+        self.assertFalse(Task.objects.exists())
 
     def test_orphaned_running_jobs_are_requeued(self):
         self._queue(30, "Hi")
@@ -403,62 +457,6 @@ class AgentWorkerTests(TestCase):
         wife_memory.refresh_from_db()
         self.assertTrue(wife_memory.active)
         self.assertTrue(client.calls[1]["messages"][-1]["content"][0]["is_error"])
-
-    @patch("assistant.services.telegram_handlers.start_extraction_conversation")
-    def test_request_change_starts_the_confirmation_flow_once(self, start):
-        self._queue(37, "Add dinner with Chidi on Friday at 19:30")
-        instruction = "Add event: Dinner with Chidi, Friday 16 October 2026 19:30-21:00."
-        client = FakeClient(
-            reply(
-                tool_use("request_change", {"instruction": instruction}, "toolu_a"),
-                tool_use("request_change", {"instruction": instruction}, "toolu_b"),
-                stop_reason="tool_use",
-            ),
-            reply(text("Card's up.")),
-        )
-        self._run(client)
-
-        start.assert_called_once()
-        self.assertEqual(start.call_args.kwargs["text"], instruction)
-        self.assertEqual(start.call_args.kwargs["update_id"], 37)
-        results = client.calls[1]["messages"][-1]["content"]
-        self.assertNotIn("is_error", results[0])
-        self.assertTrue(results[1]["is_error"])
-
-    def test_request_change_creates_a_real_pending_card(self):
-        self._queue(38, "Remind me to renew insurance")
-        from assistant.services.extractor import AssistantAction
-
-        action = AssistantAction(
-            action_type="create_task", title="Renew insurance", assigned_to="ike", confidence=0.95,
-        )
-        client = FakeClient(
-            reply(tool_use("request_change", {"instruction": "Create a task for Ike: renew insurance."}), stop_reason="tool_use"),
-            reply(text("")),
-        )
-        with patch("assistant.services.telegram_handlers.extract_telegram_action", return_value=[action]):
-            self._run(client)
-
-        conversation = TelegramConversation.objects.get()
-        self.assertEqual(conversation.status, TelegramConversation.Status.AWAITING_CONFIRMATION)
-        self.assertEqual(IncomingEmail.objects.get().gmail_message_id, "telegram:38")
-        self.assertFalse(Task.objects.exists())
-
-    def test_pending_card_blocks_a_second_request(self):
-        self._queue(39, "Add another")
-        job = AgentJob.objects.get()
-        conversation_email = IncomingEmail.objects.create(gmail_message_id="telegram:1", body_text="x")
-        TelegramConversation.objects.create(
-            chat=job.telegram_chat, requested_by=job.telegram_user, incoming_email=conversation_email,
-            status=TelegramConversation.Status.AWAITING_CONFIRMATION,
-        )
-        client = FakeClient(
-            reply(tool_use("request_change", {"instruction": "Add task X"}), stop_reason="tool_use"),
-            reply(text("Please confirm the first one.")),
-        )
-        self._run(client)
-        result = client.calls[1]["messages"][-1]["content"][0]
-        self.assertIn("already a confirmation card", result["content"])
 
     @patch("assistant.agent.tools.list_calendar_events", side_effect=RuntimeError("no creds"))
     def test_calendar_falls_back_to_lifeos_records(self, _list_events):

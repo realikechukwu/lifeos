@@ -2,6 +2,7 @@
 and record attachment metadata. Attachments are never downloaded.
 """
 
+import base64
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -40,6 +41,10 @@ _FALLBACK_DATE_FORMATS = (
 
 @dataclass
 class ParsedEmail:
+    rfc_message_id: str = ""
+    auto_submitted: str = ""
+    precedence: str = ""
+    attachment_contents: list = field(default_factory=list)
     subject: str = ""
     from_addr: str = ""
     to_addrs: list = field(default_factory=list)
@@ -168,7 +173,7 @@ def extract_forwarded_date(header_text: str) -> datetime | None:
     return None
 
 
-def parse_email_message(raw_bytes: bytes) -> ParsedEmail:
+def parse_email_message(raw_bytes: bytes, *, include_attachment_content: bool = False) -> ParsedEmail:
     msg = BytesParser(policy=policy.default).parsebytes(raw_bytes)
 
     subject = str(msg.get("Subject", "") or "")
@@ -205,16 +210,31 @@ def parse_email_message(raw_bytes: bytes) -> ParsedEmail:
         cleaned_text = ""
 
     attachments = []
+    attachment_contents = []
+    remaining = 10 * 1024 * 1024
     try:
         for part in msg.iter_attachments():
             attachments.append({
                 "filename": part.get_filename() or "attachment",
                 "mime_type": part.get_content_type(),
             })
+            if include_attachment_content:
+                metadata = attachments[-1]
+                content = part.get_payload(decode=True) or b""
+                supported = metadata["mime_type"] in {"application/pdf", "image/jpeg", "image/png"} or (
+                    settings.AGENT_DOCUMENTS_ENABLED and metadata["mime_type"] == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                )
+                if supported and len(content) <= remaining:
+                    attachment_contents.append({**metadata, "data": base64.b64encode(content).decode("ascii")})
+                    remaining -= len(content)
     except Exception:
         pass
 
     parsed = ParsedEmail(
+        rfc_message_id=str(msg.get("Message-ID", "") or "")[:998],
+        auto_submitted=str(msg.get("Auto-Submitted", "") or "")[:100],
+        precedence=str(msg.get("Precedence", "") or "")[:100],
+        attachment_contents=attachment_contents,
         subject=subject,
         from_addr=normalise_email(from_addr),
         to_addrs=[normalise_email(a) for a in to_addrs],

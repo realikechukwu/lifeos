@@ -421,6 +421,7 @@ def list_calendar_events(start_date, end_date, *, query: str = "", max_results: 
     service = build("calendar", "v3", credentials=get_google_credentials(), cache_discovery=False)
     items = service.events().list(**params).execute().get("items", [])
 
+    owned = dict(CalendarEventRecord.objects.filter(calendar_id=calendar_id).values_list("google_event_id", "id"))
     events = []
     for item in items:
         if item.get("status") == "cancelled":
@@ -428,6 +429,7 @@ def list_calendar_events(start_date, end_date, *, query: str = "", max_results: 
         start = item.get("start", {})
         end = item.get("end", {})
         events.append({
+            "lifeos_event_id": owned.get(item.get("recurringEventId") or item.get("id")),
             "title": item.get("summary", "(no title)"),
             "all_day": "date" in start,
             "start": start.get("dateTime") or start.get("date", ""),

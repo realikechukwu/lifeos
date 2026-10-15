@@ -12,6 +12,7 @@ from django.utils import timezone
 from core.models import (
     AgentJob,
     AgentMemory,
+    AgentOutcome,
     AgentMessage,
     AgentThread,
     HouseholdMember,
@@ -24,6 +25,8 @@ from assistant.services.telegram import TelegramAPIError, TelegramBot
 from .formatting import split_message, to_telegram_html
 from .loop import append_input, run_turn
 from .tools import ToolContext
+from .documents import send_telegram_documents, upload_context
+from .proposals import context_outcomes, send_cards
 
 logger = logging.getLogger(__name__)
 
@@ -163,26 +166,47 @@ def process_telegram_jobs(jobs: list[AgentJob], *, bot: TelegramBot | None = Non
         thread = _thread_for(chat, user)
         first_turn = not thread.messages.exists()
         text = "\n\n".join(j.text for j in jobs if j.text.strip())
-        append_input(thread, [
-            {"role": AgentMessage.Role.USER, "content": [{"type": "text", "text": text}]},
-            {
-                "role": AgentMessage.Role.SYSTEM,
-                "content": build_context_note(thread=thread, chat=chat, user=user, first_turn=first_turn),
-            },
-        ])
-        AgentJob.objects.filter(id__in=[j.id for j in jobs]).update(thread=thread)
+        blocks = []
+        for item in jobs:
+            blocks.extend(item.input_blocks or [{"type": "text", "text": item.text}])
+        upload_note = upload_context(ToolContext(role=user.role, speaker_name=speaker_name(user), thread=thread, job=job))
+        outcome_note, outcome_ids = context_outcomes(thread)
+        batch_metadata = {"batch_id": job.pk}
+        with transaction.atomic():
+            append_input(thread, [
+                {"role": AgentMessage.Role.USER, "content": blocks if any(j.input_blocks for j in jobs) else [{"type": "text", "text": text}]},
+                {
+                    "role": AgentMessage.Role.SYSTEM,
+                    "content": build_context_note(thread=thread, chat=chat, user=user, first_turn=first_turn) + ("\n" + outcome_note if outcome_note else "") + "\n" + upload_note,
+                },
+            ])
+            AgentOutcome.objects.filter(id__in=outcome_ids).update(delivered_at=timezone.now())
+            AgentJob.objects.filter(id__in=[j.id for j in jobs]).update(thread=thread, reply_metadata=batch_metadata)
+        job.reply_metadata = batch_metadata
     ctx = ToolContext(
         role=user.role,
+        thread=thread,
+        job=job,
         speaker_name=speaker_name(user),
         telegram_chat=chat,
         telegram_user=user,
         telegram_update_id=job.telegram_update_id,
         bot=bot,
     )
-    with _TypingIndicator(bot, chat.chat_id):
-        result = run_turn(thread, ctx, client=client)
-    if result.text:
-        _send_reply(bot, job, result.text)
+    if not job.reply_metadata.get("model_finished"):
+        with _TypingIndicator(bot, chat.chat_id):
+            result = run_turn(thread, ctx, client=client)
+        job.reply_text = result.text
+        job.reply_metadata["model_finished"] = True
+        AgentJob.objects.filter(pk=job.pk).update(reply_text=job.reply_text, reply_metadata=job.reply_metadata)
+    if not job.reply_metadata.get("text_sent"):
+        if job.reply_text:
+            _send_reply(bot, job, job.reply_text)
+        job.reply_metadata["text_sent"] = True
+        AgentJob.objects.filter(pk=job.pk).update(reply_metadata=job.reply_metadata)
+    send_cards(thread, bot)
+    for item in jobs:
+        send_telegram_documents(item, bot)
 
 
 def notify_failure(job: AgentJob, *, bot: TelegramBot | None = None) -> None:

@@ -1,7 +1,7 @@
 """Gmail API access: reading messages, managing labels, sending threaded replies."""
 
 import base64
-from email.mime.text import MIMEText
+from email.message import EmailMessage
 
 from django.conf import settings
 from google.auth.transport.requests import Request
@@ -67,6 +67,15 @@ def get_google_credentials(account_email: str | None = None) -> Credentials:
     return creds
 
 
+def _mime_message(body_text, attachments=None):
+    message = EmailMessage()
+    message.set_content(body_text)
+    for attachment in attachments or []:
+        main, sub = attachment["mime_type"].split("/", 1)
+        message.add_attachment(attachment["data"], maintype=main, subtype=sub, filename=attachment["filename"])
+    return message
+
+
 class GmailService:
     def __init__(self, credentials=None):
         self.credentials = credentials or get_google_credentials()
@@ -117,12 +126,13 @@ class GmailService:
         body_text: str,
         in_reply_to_message_id_header: str | None = None,
         cc_addr: str | None = None,
+        attachments: list | None = None,
     ) -> str:
         """Send a plain-text reply, threaded where a thread id / Message-ID header
         is available. Returns the sent message's Gmail id. `to_addr` is always
         the authorised recipient; `cc_addr` (comma-separated for more than
         one) is optional and additive only."""
-        message = MIMEText(body_text)
+        message = _mime_message(body_text, attachments)
         message["To"] = to_addr
         if cc_addr:
             message["Cc"] = cc_addr
@@ -146,11 +156,12 @@ class GmailService:
         subject: str,
         body_text: str,
         message_id_header: str | None = None,
+        attachments: list | None = None,
     ) -> str:
         """Send a fresh (non-reply) plain-text message — used for reminder
         notifications, which are not part of any existing thread. `to_addr`
         may be a comma-separated list for a "both" recipient."""
-        message = MIMEText(body_text)
+        message = _mime_message(body_text, attachments)
         message["To"] = to_addr
         message["Subject"] = subject
         if message_id_header:

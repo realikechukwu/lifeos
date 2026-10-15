@@ -452,6 +452,68 @@ restart it. Then set `ANTHROPIC_API_KEY` and `AGENT_ENABLED=true` in `.env` and
 restart both `lifeassistant-web` and `lifeassistant-agent`. Logs:
 `sudo journalctl -u lifeassistant-agent -f`.
 
+### Native agent proposals (phase 2)
+
+After deploying the reviewed branch through the usual dependency/migration
+steps, add `AGENT_PROPOSALS_ENABLED=true` to the same environment file used
+by web and worker (keep `AGENT_ENABLED=true` and `ANTHROPIC_API_KEY`). Restart:
+
+```bash
+sudo systemctl restart lifeassistant-web lifeassistant-agent
+```
+
+Migration `0013_agent_proposals` adds proposals and undelivered outcome records.
+There are no new packages. Leave the flag false to disable native changes.
+Uncertain executions are recorded and never automatically retried; inspect
+AgentProposal.result and AuditLog before attempting a new proposal.
+
+### Agent email channel (phase 3)
+
+Migration `0014_agent_email` adds email-thread identity, RFC message/loop-guard
+headers, and idempotent incoming-email jobs with delivery state. No new packages.
+After the normal reviewed deployment, add `AGENT_EMAIL_ENABLED=true` to the
+shared environment file and retain `AGENT_PROPOSALS_ENABLED=true` for writes.
+Ensure `GOOGLE_ASSISTANT_EMAIL` and both `AUTHORISED_EMAIL_*` values are correct.
+The existing Gmail timer queues work; the existing agent worker sends replies.
+Restart `lifeassistant-web` and `lifeassistant-agent`; the next Gmail oneshot
+reads the updated environment automatically. No new timer or restart of an
+idle oneshot is necessary.
+
+### Agent documents and web reading (phase 4)
+
+Migration `0015_agent_documents` adds private uploads, saved profiles, generated
+DOCX data, document deliveries and daily email reservations. Requirements pin
+`pypdf==6.20.1`, `python-docx==1.2.0`, `lxml==6.1.3` and
+`typing_extensions==4.16.0`. The normal deployment installs these before
+restarting services. There is no media directory, upload endpoint or Nginx
+change: binaries are stored privately in the database.
+
+Add these to the shared environment file after the reviewed deployment:
+
+```dotenv
+AGENT_DOCUMENTS_ENABLED=true
+AGENT_WEB_ENABLED=true
+```
+
+Retain `AGENT_ENABLED=true` for Telegram, `AGENT_EMAIL_ENABLED=true` for email,
+and `AGENT_PROPOSALS_ENABLED=true` for household changes. Restart:
+
+```bash
+sudo systemctl restart lifeassistant-web lifeassistant-agent
+```
+
+The web-tool flag takes effect at process startup. Omission while disabled is
+a deliberate exception to a flag-independent tool set: remote tools cannot be
+blocked by a local handler. All requests inside one worker share the same
+static prompt and tool list, across people and channels. Disabling a native
+feature makes its handler return an error without changing the tool list.
+
+Private source text and attachments in append-only histories increase database
+usage. Profile records can be deactivated in Django admin. Proposal, upload and
+generated-document records have read-only admin views for inspection; binary
+DOCX data is excluded from the admin form. No automatic retention policy or
+external-delivery retry guarantee is added.
+
 ## 20. Running the first live email test
 
 1. Authenticate the assistant Google account **against production data**:

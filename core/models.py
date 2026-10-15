@@ -77,6 +77,9 @@ class IncomingEmail(models.Model):
 
     gmail_message_id = models.CharField(max_length=64, unique=True)
     gmail_thread_id = models.CharField(max_length=64, blank=True, default="")
+    rfc_message_id = models.CharField(max_length=998, blank=True, default="")
+    auto_submitted = models.CharField(max_length=100, blank=True, default="")
+    precedence = models.CharField(max_length=100, blank=True, default="")
     source = models.CharField(max_length=20, choices=Source.choices, default=Source.EMAIL)
 
     outer_sender = models.EmailField(help_text="Address that actually sent/forwarded the email to us.")
@@ -692,6 +695,7 @@ class AgentThread(models.Model):
 
     channel = models.CharField(max_length=20, choices=Channel.choices)
     role = models.CharField(max_length=20, choices=HouseholdMember.Role.choices)
+    email_thread_id = models.CharField(max_length=64, unique=True, null=True, blank=True)
     telegram_chat = models.ForeignKey(
         TelegramChat, on_delete=models.CASCADE, null=True, blank=True, related_name="agent_threads"
     )
@@ -749,6 +753,13 @@ class AgentJob(models.Model):
         FAILED = "failed", "Failed"
 
     channel = models.CharField(max_length=20, choices=AgentThread.Channel.choices)
+    incoming_email = models.OneToOneField(
+        IncomingEmail, on_delete=models.CASCADE, null=True, blank=True, related_name="agent_job"
+    )
+    input_blocks = models.JSONField(default=list, blank=True)
+    reply_text = models.TextField(blank=True, default="")
+    reply_metadata = models.JSONField(default=dict, blank=True)
+    sent_reply_id = models.CharField(max_length=100, blank=True, default="")
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.QUEUED)
     telegram_chat = models.ForeignKey(
         TelegramChat, on_delete=models.CASCADE, null=True, blank=True, related_name="agent_jobs"
@@ -791,3 +802,125 @@ class AgentMemory(models.Model):
 
     def __str__(self):
         return f"{self.role}: {self.text[:60]}"
+
+
+class AgentProposal(models.Model):
+    class Kind(models.TextChoices):
+        CREATE_EVENT = "create_event", "Create event"
+        CREATE_TASK = "create_task", "Create task"
+        CREATE_NOTE = "create_note", "Create note"
+        CREATE_REMINDER = "create_reminder", "Create reminder"
+        COMPLETE_TASK = "complete_task", "Complete task"
+        UPDATE_TASK = "update_task", "Update task"
+        RESCHEDULE_EVENT = "reschedule_event", "Reschedule event"
+        CANCEL_EVENT = "cancel_event", "Cancel event"
+        CANCEL_REMINDER = "cancel_reminder", "Cancel reminder"
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        CONFIRMED = "confirmed", "Confirmed"
+        CANCELLED = "cancelled", "Cancelled"
+        SUPERSEDED = "superseded", "Superseded"
+        EXPIRED = "expired", "Expired"
+        FAILED = "failed", "Failed"
+
+    thread = models.ForeignKey(AgentThread, on_delete=models.CASCADE, related_name="proposals")
+    role = models.CharField(max_length=20, choices=HouseholdMember.Role.choices)
+    telegram_chat = models.ForeignKey(TelegramChat, on_delete=models.CASCADE, null=True, blank=True)
+    telegram_user = models.ForeignKey(TelegramUser, on_delete=models.PROTECT, null=True, blank=True)
+    kind = models.CharField(max_length=30, choices=Kind.choices)
+    payload = models.JSONField(default=dict)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    result = models.JSONField(default=dict, blank=True)
+    telegram_message_id = models.BigIntegerField(null=True, blank=True)
+    replaces = models.ForeignKey("self", on_delete=models.SET_NULL, null=True, blank=True)
+    confirmation_email = models.ForeignKey(
+        IncomingEmail, on_delete=models.SET_NULL, null=True, blank=True, related_name="offered_proposals"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    decided_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["id"]
+
+
+class AgentOutcome(models.Model):
+    thread = models.ForeignKey(AgentThread, on_delete=models.CASCADE, related_name="outcomes")
+    text = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    delivered_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["id"]
+
+
+class AgentUpload(models.Model):
+    """An extracted source kept with the job, never supplied back by the model."""
+
+    job = models.ForeignKey(AgentJob, on_delete=models.CASCADE, related_name="uploads")
+    role = models.CharField(max_length=20, choices=HouseholdMember.Role.choices)
+    filename = models.CharField(max_length=255)
+    mime_type = models.CharField(max_length=100)
+    text = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-id"]
+
+
+class ProfileDocument(models.Model):
+    class Kind(models.TextChoices):
+        CV = "cv", "CV"
+        COVER_LETTER = "cover_letter", "Cover letter"
+        EXPERIENCE = "experience", "Experience"
+        OTHER = "other", "Other"
+
+    role = models.CharField(max_length=20, choices=HouseholdMember.Role.choices)
+    title = models.CharField(max_length=255)
+    kind = models.CharField(max_length=20, choices=Kind.choices)
+    text = models.TextField()
+    source_filename = models.CharField(max_length=255)
+    source_upload = models.ForeignKey(AgentUpload, on_delete=models.SET_NULL, null=True, blank=True)
+    active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-updated_at", "-id"]
+
+
+class GeneratedDocument(models.Model):
+    role = models.CharField(max_length=20, choices=HouseholdMember.Role.choices)
+    thread = models.ForeignKey(AgentThread, on_delete=models.CASCADE, related_name="generated_documents")
+    job = models.ForeignKey(AgentJob, on_delete=models.SET_NULL, null=True, blank=True)
+    title = models.CharField(max_length=255)
+    filename = models.CharField(max_length=255)
+    content = models.TextField()
+    # Private DB storage avoids a publicly served media directory and server setup.
+    data = models.BinaryField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-id"]
+
+
+class AgentEmailDelivery(models.Model):
+    """A reservation counts toward the daily limit even if delivery is uncertain."""
+
+    role = models.CharField(max_length=20, choices=HouseholdMember.Role.choices)
+    day = models.DateField()
+    slot = models.PositiveSmallIntegerField()
+    message_id = models.CharField(max_length=100, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["role", "day", "slot"], name="agent_email_daily_slot")]
+
+
+class AgentDocumentDelivery(models.Model):
+    job = models.ForeignKey(AgentJob, on_delete=models.CASCADE, related_name="document_deliveries")
+    document = models.ForeignKey(GeneratedDocument, on_delete=models.CASCADE)
+    sent_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["job", "document"], name="agent_one_document_per_job")]
