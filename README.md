@@ -219,6 +219,14 @@ send, delete or relabel. If the Google Cloud OAuth consent screen is in
 "Testing", add the address as a test user (Testing tokens expire after 7 days);
 "In production" avoids that.
 
+**Agent-written briefings.** With `AGENT_BRIEFINGS_ENABLED=true`, the daily
+brief (at each person's briefing time) and the Sunday 18:00 week-ahead plan are
+written by the agent instead of the template: calendar, tasks, reminders and a
+triage of the person's own inbox (if connected), with confirmation cards for
+anything worth adding. They arrive in the private chat, so you can reply to
+them. The prompts live in `assistant/agent/briefings.py`. If the agent fails,
+the template briefing is sent instead. The monthly briefing stays a template.
+
 ### Scheduled Telegram briefings
 
 After an authorised user has started the bot privately, LifeOS sends a daily

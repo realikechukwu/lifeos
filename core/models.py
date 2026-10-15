@@ -772,6 +772,8 @@ class AgentJob(models.Model):
     )
     telegram_update_id = models.BigIntegerField(null=True, blank=True, unique=True)
     telegram_message_id = models.BigIntegerField(null=True, blank=True)
+    # Set for scheduler-started briefings (daily / weekly); blank for messages.
+    briefing_type = models.CharField(max_length=10, blank=True, default="")
     # Cleared once the job finishes: by then the text lives in the thread history.
     text = models.TextField(blank=True, default="")
     thread = models.ForeignKey(

@@ -229,6 +229,8 @@ AGENT_WEB_ENABLED = _bool_env("AGENT_WEB_ENABLED", False)
 # Read-only access to each person's own Gmail (signed in with
 # `google_auth --account <address> --readonly`). Never used for sending.
 AGENT_PERSONAL_INBOX_ENABLED = _bool_env("AGENT_PERSONAL_INBOX_ENABLED", False)
+# The agent writes the daily brief and Sunday week-ahead plan (template fallback).
+AGENT_BRIEFINGS_ENABLED = _bool_env("AGENT_BRIEFINGS_ENABLED", False)
 PERSONAL_GMAIL_IKE = os.environ.get("PERSONAL_GMAIL_IKE", "")
 PERSONAL_GMAIL_WIFE = os.environ.get("PERSONAL_GMAIL_WIFE", "")
 AGENT_MODEL = os.environ.get("AGENT_MODEL", "claude-sonnet-5-5")

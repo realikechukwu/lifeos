@@ -14,6 +14,7 @@ from django.utils import timezone
 from googleapiclient.errors import HttpError
 
 from core.models import AgentJob
+from assistant.services.telegram import TelegramBot
 
 from .telegram import notify_failure, process_telegram_jobs
 
@@ -54,11 +55,12 @@ def claim_next_jobs() -> list[AgentJob]:
             status=AgentJob.Status.QUEUED,
             reply_metadata__batch_id=first.reply_metadata["batch_id"],
         ).exclude(pk=first.pk).values_list("id", flat=True))
-    elif first.thread_id is None and first.channel == "telegram":
+    elif first.thread_id is None and first.channel == "telegram" and not first.briefing_type:
         siblings = list(
             AgentJob.objects.filter(
                 status=AgentJob.Status.QUEUED,
                 thread__isnull=True,
+                briefing_type="",
                 channel=first.channel,
                 telegram_chat_id=first.telegram_chat_id,
                 telegram_user_id=first.telegram_user_id,
@@ -109,6 +111,12 @@ def run_jobs(jobs: list[AgentJob], *, bot=None, client=None, gmail_service=None)
                 notify_email_failure(jobs[0], gmail_service=gmail_service)
             except Exception:
                 logger.exception("Failed to notify email job %s", jobs[0].id)
+        elif jobs[0].briefing_type:
+            from .briefings import send_template_briefing
+            try:
+                send_template_briefing(jobs[0], bot or TelegramBot())
+            except Exception:
+                logger.exception("Template fallback failed for briefing job %s", jobs[0].id)
         else:
             notify_failure(jobs[0], bot=bot)
         return

@@ -9,6 +9,7 @@ from django.core.management.base import BaseCommand
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 
+from assistant.agent.briefings import enqueue_briefing
 from assistant.services.telegram import TelegramBot
 from assistant.services.telegram_handlers import (
     build_planning_message,
@@ -70,6 +71,14 @@ def due_briefings(preference: TelegramPreference, local_now) -> list[DueBriefing
     return due
 
 
+def _agent_writes(briefing_type: str) -> bool:
+    return (
+        settings.AGENT_ENABLED
+        and settings.AGENT_BRIEFINGS_ENABLED
+        and briefing_type in (TelegramBriefingDelivery.BriefingType.DAILY, TelegramBriefingDelivery.BriefingType.WEEKLY)
+    )
+
+
 def send_due_briefings(*, bot=None, now=None) -> tuple[int, int]:
     """Send each due briefing type at most once per user/date."""
     bot = bot or TelegramBot()
@@ -97,6 +106,10 @@ def send_due_briefings(*, bot=None, now=None) -> tuple[int, int]:
                         briefing_date=briefing.delivery_date,
                     )
             except IntegrityError:
+                continue
+            if _agent_writes(briefing.briefing_type):
+                enqueue_briefing(chat, user, briefing.briefing_type, briefing.delivery_date)
+                sent += 1
                 continue
             try:
                 if briefing.briefing_type == TelegramBriefingDelivery.BriefingType.DAILY:
