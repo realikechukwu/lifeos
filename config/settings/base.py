@@ -226,6 +226,11 @@ AGENT_EMAIL_ENABLED = _bool_env("AGENT_EMAIL_ENABLED", False)
 AGENT_DOCUMENTS_ENABLED = _bool_env("AGENT_DOCUMENTS_ENABLED", False)
 # Server tools are selected once at worker startup; restart to change this.
 AGENT_WEB_ENABLED = _bool_env("AGENT_WEB_ENABLED", False)
+# Read-only access to each person's own Gmail (signed in with
+# `google_auth --account <address> --readonly`). Never used for sending.
+AGENT_PERSONAL_INBOX_ENABLED = _bool_env("AGENT_PERSONAL_INBOX_ENABLED", False)
+PERSONAL_GMAIL_IKE = os.environ.get("PERSONAL_GMAIL_IKE", "")
+PERSONAL_GMAIL_WIFE = os.environ.get("PERSONAL_GMAIL_WIFE", "")
 AGENT_MODEL = os.environ.get("AGENT_MODEL", "claude-sonnet-5-5")
 AGENT_EFFORT = os.environ.get("AGENT_EFFORT", "medium")
 AGENT_MAX_TOOL_ROUNDS = _int_env("AGENT_MAX_TOOL_ROUNDS", 12)
