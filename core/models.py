@@ -676,3 +676,118 @@ class GoogleCredential(models.Model):
         except InvalidToken:
             return {}
         return json.loads(raw.decode("utf-8"))
+
+
+class AgentThread(models.Model):
+    """One running conversation between a household member and the Claude agent.
+
+    History is replayed to the model verbatim on every turn, so messages are
+    append-only. A thread idle for AGENT_THREAD_IDLE_HOURS (or reset with
+    /new) is closed and the next message starts a new one.
+    """
+
+    class Channel(models.TextChoices):
+        TELEGRAM = "telegram", "Telegram"
+        EMAIL = "email", "Email"
+
+    channel = models.CharField(max_length=20, choices=Channel.choices)
+    role = models.CharField(max_length=20, choices=HouseholdMember.Role.choices)
+    telegram_chat = models.ForeignKey(
+        TelegramChat, on_delete=models.CASCADE, null=True, blank=True, related_name="agent_threads"
+    )
+    telegram_user = models.ForeignKey(
+        TelegramUser, on_delete=models.CASCADE, null=True, blank=True, related_name="agent_threads"
+    )
+    last_activity_at = models.DateTimeField()
+    closed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-last_activity_at"]
+        indexes = [models.Index(fields=["channel", "telegram_chat", "telegram_user", "closed_at"])]
+
+    def __str__(self):
+        return f"Agent thread {self.id} ({self.channel}, {self.role})"
+
+
+class AgentMessage(models.Model):
+    """One API-shaped message in an agent thread, stored exactly as sent/received."""
+
+    class Role(models.TextChoices):
+        USER = "user", "User"
+        ASSISTANT = "assistant", "Assistant"
+        # Mid-conversation operator context (current time, who is speaking).
+        SYSTEM = "system", "System"
+
+    thread = models.ForeignKey(AgentThread, on_delete=models.CASCADE, related_name="messages")
+    role = models.CharField(max_length=10, choices=Role.choices)
+    content = models.JSONField(default=list)
+    # Usage is recorded on assistant messages for cost and cache-hit tracking.
+    model = models.CharField(max_length=64, blank=True, default="")
+    stop_reason = models.CharField(max_length=30, blank=True, default="")
+    input_tokens = models.PositiveIntegerField(null=True, blank=True)
+    output_tokens = models.PositiveIntegerField(null=True, blank=True)
+    cache_read_tokens = models.PositiveIntegerField(null=True, blank=True)
+    cache_creation_tokens = models.PositiveIntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["id"]
+
+    def __str__(self):
+        return f"Agent message {self.id} ({self.role})"
+
+
+class AgentJob(models.Model):
+    """A queued request for the agent worker. The webhook only enqueues; all
+    model calls happen in run_agent_worker so Telegram never waits on them."""
+
+    class Status(models.TextChoices):
+        QUEUED = "queued", "Queued"
+        RUNNING = "running", "Running"
+        DONE = "done", "Done"
+        FAILED = "failed", "Failed"
+
+    channel = models.CharField(max_length=20, choices=AgentThread.Channel.choices)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.QUEUED)
+    telegram_chat = models.ForeignKey(
+        TelegramChat, on_delete=models.CASCADE, null=True, blank=True, related_name="agent_jobs"
+    )
+    telegram_user = models.ForeignKey(
+        TelegramUser, on_delete=models.CASCADE, null=True, blank=True, related_name="agent_jobs"
+    )
+    telegram_update_id = models.BigIntegerField(null=True, blank=True, unique=True)
+    telegram_message_id = models.BigIntegerField(null=True, blank=True)
+    # Cleared once the job finishes: by then the text lives in the thread history.
+    text = models.TextField(blank=True, default="")
+    thread = models.ForeignKey(
+        AgentThread, on_delete=models.SET_NULL, null=True, blank=True, related_name="jobs"
+    )
+    attempts = models.PositiveSmallIntegerField(default=0)
+    error = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["id"]
+        indexes = [models.Index(fields=["status", "id"])]
+
+    def __str__(self):
+        return f"Agent job {self.id} ({self.status})"
+
+
+class AgentMemory(models.Model):
+    """A durable fact or preference the agent saved for one household member."""
+
+    role = models.CharField(max_length=20, choices=HouseholdMember.Role.choices)
+    text = models.CharField(max_length=500)
+    active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at", "id"]
+        verbose_name_plural = "Agent memories"
+
+    def __str__(self):
+        return f"{self.role}: {self.text[:60]}"

@@ -1,0 +1,28 @@
+[Unit]
+Description=Family Assistant — Claude agent worker (answers queued Telegram messages)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=lifeassistant
+Group=lifeassistant
+WorkingDirectory=/opt/lifeassistant
+
+EnvironmentFile=/opt/lifeassistant/.env
+Environment=DJANGO_SETTINGS_MODULE=config.settings.production
+# Unbuffered so worker output reaches the journal straight away.
+Environment=PYTHONUNBUFFERED=1
+
+ExecStart=/opt/lifeassistant/.venv/bin/python manage.py run_agent_worker
+
+# The worker finishes its current reply before exiting on SIGTERM.
+TimeoutStopSec=120
+Restart=always
+RestartSec=5
+
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

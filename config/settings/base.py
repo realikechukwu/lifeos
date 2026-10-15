@@ -216,6 +216,18 @@ TELEGRAM_WIFE_USER_ID = _int_env("TELEGRAM_WIFE_USER_ID")
 TELEGRAM_ALLOWED_GROUP_CHAT_IDS = _int_list_env("TELEGRAM_ALLOWED_GROUP_CHAT_IDS")
 TELEGRAM_MAX_CLARIFICATIONS = _int_env("TELEGRAM_MAX_CLARIFICATIONS", 4)
 
+# The Claude agent answers free-text Telegram messages from a background
+# worker (run_agent_worker). Off by default: when disabled, Telegram keeps the
+# original extraction flow exactly as before.
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+AGENT_ENABLED = _bool_env("AGENT_ENABLED", False)
+AGENT_MODEL = os.environ.get("AGENT_MODEL", "claude-sonnet-5-5")
+AGENT_EFFORT = os.environ.get("AGENT_EFFORT", "medium")
+AGENT_MAX_TOOL_ROUNDS = _int_env("AGENT_MAX_TOOL_ROUNDS", 12)
+# A conversation idle for longer than this starts a fresh thread; saved
+# memories and LifeOS data carry over, the chat history does not.
+AGENT_THREAD_IDLE_HOURS = _int_env("AGENT_THREAD_IDLE_HOURS", 8)
+
 
 # ---------------------------------------------------------------------------
 # Logging — safe by default: never logs email bodies, OAuth tokens, API

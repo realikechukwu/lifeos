@@ -430,6 +430,28 @@ The command does not print the token or webhook secret. In Telegram, send
 Bot Settings → Group Privacy → Turn off, then remove and re-add the bot if
 Telegram asks you to do so.
 
+### Claude agent worker (optional)
+
+Install the worker once. It runs as `lifeassistant`, like the other units, and
+sits idle until `AGENT_ENABLED=true`:
+
+```bash
+sudo cp <PROJECT_PATH>/deploy/systemd/lifeassistant-agent.service /etc/systemd/system/
+# Same Telegram environment as the web service, if it uses a drop-in:
+sudo mkdir -p /etc/systemd/system/lifeassistant-agent.service.d
+sudo cp /etc/systemd/system/lifeassistant-web.service.d/telegram.conf \
+    /etc/systemd/system/lifeassistant-agent.service.d/
+sudo systemctl daemon-reload
+sudo systemctl enable --now lifeassistant-agent
+```
+
+Add `lifeassistant-agent` to the deploy sudoers rule
+(`deploy/sudoers/lifeassistant-deploy.example`) and the `AGENT_SERVICE`
+restart to the server's `update.sh` (`deploy/update.sh.example`), so deploys
+restart it. Then set `ANTHROPIC_API_KEY` and `AGENT_ENABLED=true` in `.env` and
+restart both `lifeassistant-web` and `lifeassistant-agent`. Logs:
+`sudo journalctl -u lifeassistant-agent -f`.
+
 ## 20. Running the first live email test
 
 1. Authenticate the assistant Google account **against production data**:

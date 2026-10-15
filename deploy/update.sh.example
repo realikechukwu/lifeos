@@ -25,6 +25,7 @@ PROJECT_PATH="<PROJECT_PATH>"          # e.g. /opt/lifeassistant
 VENV_PATH="<VENV_PATH>"                # e.g. /opt/lifeassistant/.venv
 GIT_BRANCH="main"                      # branch to deploy
 WEB_SERVICE="lifeassistant-web"
+AGENT_SERVICE="lifeassistant-agent"   # restarted only once its unit is installed
 
 # Use the real public URL, not a bare IP/port. Django's ALLOWED_HOSTS
 # rejects requests whose Host header doesn't match — curling an IP
@@ -73,6 +74,11 @@ python manage.py check_static_manifest
 
 echo "==> Restarting ${WEB_SERVICE}..."
 sudo systemctl restart "${WEB_SERVICE}"
+
+if systemctl is-enabled --quiet "${AGENT_SERVICE}" 2>/dev/null; then
+    echo "==> Restarting ${AGENT_SERVICE}..."
+    sudo systemctl restart "${AGENT_SERVICE}"
+fi
 
 echo "==> Waiting for the app to come back up..."
 sleep 2

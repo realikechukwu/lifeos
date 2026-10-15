@@ -5,7 +5,7 @@ automatic processing and the Django admin 'approve and create event' action.
 
 import base64
 import hashlib
-from datetime import time, timedelta
+from datetime import datetime, time, timedelta
 
 from django.conf import settings
 from django.utils import timezone
@@ -392,3 +392,48 @@ def cancel_calendar_event(record: CalendarEventRecord, *, source_email=None) -> 
         success=True,
         details={"title": title},
     )
+
+
+def list_calendar_events(start_date, end_date, *, query: str = "", max_results: int = 100) -> list[dict]:
+    """Read events live from the shared Google Calendar in ``[start_date, end_date)``.
+
+    Includes everything on the calendar (events added directly in Google,
+    LifeOS events and mirrored Patchwork shifts) with recurring series
+    expanded into single occurrences.
+    """
+    calendar_id = settings.GOOGLE_CALENDAR_ID
+    if not calendar_id:
+        raise RuntimeError("GOOGLE_CALENDAR_ID is not configured.")
+    zone = timezone.get_current_timezone()
+    time_min = timezone.make_aware(datetime.combine(start_date, time.min), zone)
+    time_max = timezone.make_aware(datetime.combine(end_date, time.min), zone)
+    params = {
+        "calendarId": calendar_id,
+        "timeMin": time_min.isoformat(),
+        "timeMax": time_max.isoformat(),
+        "singleEvents": True,
+        "orderBy": "startTime",
+        "maxResults": max(1, min(max_results, 250)),
+        "timeZone": str(zone),
+    }
+    if query:
+        params["q"] = query
+    service = build("calendar", "v3", credentials=get_google_credentials(), cache_discovery=False)
+    items = service.events().list(**params).execute().get("items", [])
+
+    events = []
+    for item in items:
+        if item.get("status") == "cancelled":
+            continue
+        start = item.get("start", {})
+        end = item.get("end", {})
+        events.append({
+            "title": item.get("summary", "(no title)"),
+            "all_day": "date" in start,
+            "start": start.get("dateTime") or start.get("date", ""),
+            "end": end.get("dateTime") or end.get("date", ""),
+            "location": item.get("location", ""),
+            "description": (item.get("description") or "")[:500],
+            "recurring": bool(item.get("recurringEventId")),
+        })
+    return events
