@@ -5,6 +5,7 @@ Uncertain executions are never retried automatically.
 """
 from datetime import datetime, timedelta, timezone as dt_timezone
 from functools import partial
+import re
 
 from django.conf import settings
 from django.db import transaction
@@ -252,7 +253,12 @@ def edit_card(proposal, bot):
 def propose(ctx, args, *, kind):
     if not settings.AGENT_PROPOSALS_ENABLED:
         raise ToolInputError("Native proposals are disabled by the owner.")
-    if ctx.thread is None or ctx.telegram_user is None or ctx.telegram_chat is None:
+    if ctx.thread is None:
+        raise ToolInputError("Proposals require a conversation.")
+    if ctx.channel == "email":
+        if not settings.AGENT_EMAIL_ENABLED or not ctx.incoming_email or not ctx.newest_instruction.strip():
+            raise ToolInputError("Email changes require the authorised sender's own new instruction.")
+    elif ctx.telegram_user is None or ctx.telegram_chat is None:
         raise ToolInputError("Proposals require a Telegram conversation.")
     raw = dict(args)
     replaces_id = raw.pop("replaces_proposal_id", None)
@@ -280,7 +286,11 @@ def propose(ctx, args, *, kind):
             record_outcome(old, f"superseded by proposal {proposal.id}")
     if old:
         edit_card(old, ctx.bot)
-    return {"proposal_id": proposal.id, "status": proposal.status, "summary": summary(proposal)}
+    ctx.proposal_ids.append(proposal.id)
+    if ctx.channel == "email" and kind in {*CREATE_TYPES, "complete_task"}:
+        decide(proposal, confirm=True)
+        proposal.refresh_from_db()
+    return {"proposal_id": proposal.id, "status": proposal.status, "summary": summary(proposal), "result": proposal.result}
 
 
 def _execute(proposal):
@@ -386,6 +396,42 @@ def context_outcomes(thread):
     lines = ["Since your last reply:"] + [o.text for o in outcomes] if outcomes else []
     lines += ["Pending proposal: " + summary(p) for p in pending]
     return "\n".join(lines), [o.id for o in outcomes]
+
+
+def confirm_proposal(ctx, args):
+    if ctx.channel != "email" or not settings.AGENT_EMAIL_ENABLED or not settings.AGENT_PROPOSALS_ENABLED:
+        raise ToolInputError("confirm_proposal works only in the enabled email channel.")
+    if set(args) != {"proposal_id"}:
+        raise ToolInputError("Supply only proposal_id.")
+    proposal_id = _id(args.get("proposal_id"), "proposal_id")
+    # Inspect only the newest sender-authored words, never quoted text or model assertions.
+    confirmation = re.fullmatch(r"\s*yes(?:\s+(\d+))?\s*[.!]?\s*", ctx.newest_instruction, re.IGNORECASE)
+    if not confirmation:
+        raise ToolInputError("The newest email must explicitly say YES or YES <proposal id>.")
+    if confirmation.group(1) and int(confirmation.group(1)) != proposal_id:
+        raise ToolInputError("That is not the proposal the sender confirmed.")
+    proposal = AgentProposal.objects.filter(
+        pk=proposal_id, thread=ctx.thread, role=ctx.role, telegram_user__isnull=True,
+    ).first()
+    if proposal is None or not proposal.confirmation_email_id or proposal.confirmation_email_id == ctx.incoming_email.pk:
+        raise ToolInputError("Only a proposal offered in an earlier email in this thread can be confirmed.")
+    if proposal.confirmation_email.created_at >= ctx.incoming_email.created_at:
+        raise ToolInputError("The confirming email must be newer than the proposal email.")
+    if not confirmation.group(1) and ctx.thread.proposals.filter(
+        role=ctx.role, status="pending", confirmation_email__isnull=False,
+        created_at__gt=timezone.now() - timedelta(hours=24),
+    ).exclude(pk=proposal.pk).exists():
+        raise ToolInputError("There are several pending proposals. Ask for YES followed by the proposal id.")
+    decide(proposal, confirm=True)
+    proposal.refresh_from_db()
+    ctx.proposal_ids.append(proposal.pk)
+    return {"proposal_id": proposal.id, "status": proposal.status, "result": proposal.result}
+
+
+CONFIRM_DEFINITION = {
+    "name": "confirm_proposal", "description": "Confirm a previously emailed proposal only when the newest sender-authored email says YES or YES <id>. Email only; Telegram uses buttons.",
+    "input_schema": {"type": "object", "properties": {"proposal_id": {"type": "integer"}}, "required": ["proposal_id"], "additionalProperties": False},
+}
 
 
 def tool_definitions():

@@ -15,8 +15,8 @@ from datetime import date, timedelta
 
 from django.db.models import Q
 
-from core.models import AgentMemory, AgentThread, Note, Reminder, Task, TelegramChat, TelegramUser
-from .proposals import ToolInputError, HANDLERS as PROPOSAL_HANDLERS, tool_definitions
+from core.models import AgentMemory, AgentThread, IncomingEmail, Note, Reminder, Task, TelegramChat, TelegramUser
+from .proposals import ToolInputError, HANDLERS as PROPOSAL_HANDLERS, tool_definitions, confirm_proposal, CONFIRM_DEFINITION
 
 from assistant.services.google_calendar import list_calendar_events
 from assistant.services.telegram_inbox import calendar_items_between
@@ -36,6 +36,11 @@ class ToolContext:
     telegram_update_id: int | None = None
     bot: object | None = None
     thread: AgentThread | None = None
+    channel: str = "telegram"
+    incoming_email: IncomingEmail | None = None
+    newest_instruction: str = ""
+    gmail_service: object | None = None
+    proposal_ids: list[int] = field(default_factory=list)
     events: list[str] = field(default_factory=list)
 
 
@@ -245,9 +250,10 @@ _DEFINITIONS = [
     },
 ]
 
-TOOL_DEFINITIONS = sorted(_DEFINITIONS + tool_definitions(), key=lambda tool: tool["name"])
+TOOL_DEFINITIONS = sorted(_DEFINITIONS + tool_definitions() + [CONFIRM_DEFINITION], key=lambda tool: tool["name"])
 
 HANDLERS = {
+    "confirm_proposal": lambda ctx, args: _dumps(confirm_proposal(ctx, args)),
     "forget": forget,
     "get_calendar": get_calendar,
     "list_reminders": list_reminders,

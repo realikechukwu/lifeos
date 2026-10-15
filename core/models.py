@@ -77,6 +77,9 @@ class IncomingEmail(models.Model):
 
     gmail_message_id = models.CharField(max_length=64, unique=True)
     gmail_thread_id = models.CharField(max_length=64, blank=True, default="")
+    rfc_message_id = models.CharField(max_length=998, blank=True, default="")
+    auto_submitted = models.CharField(max_length=100, blank=True, default="")
+    precedence = models.CharField(max_length=100, blank=True, default="")
     source = models.CharField(max_length=20, choices=Source.choices, default=Source.EMAIL)
 
     outer_sender = models.EmailField(help_text="Address that actually sent/forwarded the email to us.")
@@ -692,6 +695,7 @@ class AgentThread(models.Model):
 
     channel = models.CharField(max_length=20, choices=Channel.choices)
     role = models.CharField(max_length=20, choices=HouseholdMember.Role.choices)
+    email_thread_id = models.CharField(max_length=64, unique=True, null=True, blank=True)
     telegram_chat = models.ForeignKey(
         TelegramChat, on_delete=models.CASCADE, null=True, blank=True, related_name="agent_threads"
     )
@@ -749,6 +753,13 @@ class AgentJob(models.Model):
         FAILED = "failed", "Failed"
 
     channel = models.CharField(max_length=20, choices=AgentThread.Channel.choices)
+    incoming_email = models.OneToOneField(
+        IncomingEmail, on_delete=models.CASCADE, null=True, blank=True, related_name="agent_job"
+    )
+    input_blocks = models.JSONField(default=list, blank=True)
+    reply_text = models.TextField(blank=True, default="")
+    reply_metadata = models.JSONField(default=dict, blank=True)
+    sent_reply_id = models.CharField(max_length=100, blank=True, default="")
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.QUEUED)
     telegram_chat = models.ForeignKey(
         TelegramChat, on_delete=models.CASCADE, null=True, blank=True, related_name="agent_jobs"
@@ -823,6 +834,9 @@ class AgentProposal(models.Model):
     result = models.JSONField(default=dict, blank=True)
     telegram_message_id = models.BigIntegerField(null=True, blank=True)
     replaces = models.ForeignKey("self", on_delete=models.SET_NULL, null=True, blank=True)
+    confirmation_email = models.ForeignKey(
+        IncomingEmail, on_delete=models.SET_NULL, null=True, blank=True, related_name="offered_proposals"
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     decided_at = models.DateTimeField(null=True, blank=True)
 

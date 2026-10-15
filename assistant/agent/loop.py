@@ -101,6 +101,10 @@ def append_input(thread: AgentThread, new_messages: list[dict]) -> None:
     continues the same turn instead of repeating it."""
     history = _history(thread)
     _close_dangling_tool_calls(thread, history)
+    if history and history[-1]["role"] == AgentMessage.Role.SYSTEM:
+        _append(thread, AgentMessage.Role.ASSISTANT, [{
+            "type": "text", "text": "The previous attempt ended before a reply was produced.",
+        }])
     for message in new_messages:
         _append(thread, message["role"], message["content"])
 

@@ -11,6 +11,7 @@ from datetime import timedelta
 import anthropic
 from django.db.models import F
 from django.utils import timezone
+from googleapiclient.errors import HttpError
 
 from core.models import AgentJob
 
@@ -48,7 +49,7 @@ def claim_next_jobs() -> list[AgentJob]:
         return []
     # A retried job already has its input in a thread; don't merge new messages into it.
     siblings = []
-    if first.thread_id is None:
+    if first.thread_id is None and first.channel == "telegram":
         siblings = list(
             AgentJob.objects.filter(
                 status=AgentJob.Status.QUEUED,
@@ -61,7 +62,7 @@ def claim_next_jobs() -> list[AgentJob]:
         )
     claimed = [first.id] + _claim(siblings)
     return list(AgentJob.objects.filter(id__in=claimed).select_related(
-        "telegram_chat", "telegram_user", "thread"
+        "telegram_chat", "telegram_user", "thread", "incoming_email"
     ).order_by("id"))
 
 
@@ -71,15 +72,21 @@ def requeue_orphaned_jobs() -> int:
 
 
 def _is_transient(exc: Exception) -> bool:
+    if isinstance(exc, HttpError):
+        return exc.resp.status in (408, 429, 500, 502, 503, 504)
     if isinstance(exc, (anthropic.APIConnectionError, anthropic.RateLimitError, anthropic.InternalServerError)):
         return True
     return isinstance(exc, anthropic.APIStatusError) and exc.status_code in (408, 409, 529)
 
 
-def run_jobs(jobs: list[AgentJob], *, bot=None, client=None) -> None:
+def run_jobs(jobs: list[AgentJob], *, bot=None, client=None, gmail_service=None) -> None:
     ids = [job.id for job in jobs]
     try:
-        process_telegram_jobs(jobs, bot=bot, client=client)
+        if jobs[0].channel == "email":
+            from .email import process_email_job
+            process_email_job(jobs[0], client=client, gmail_service=gmail_service)
+        else:
+            process_telegram_jobs(jobs, bot=bot, client=client)
     except Exception as exc:  # noqa: BLE001 - one bad job must not stop the worker
         retry = _is_transient(exc) and jobs[0].attempts < MAX_ATTEMPTS
         logger.exception("agent jobs %s failed (retry=%s)", ids, retry)
@@ -88,10 +95,18 @@ def run_jobs(jobs: list[AgentJob], *, bot=None, client=None) -> None:
             return
         AgentJob.objects.filter(id__in=ids).update(
             status=AgentJob.Status.FAILED, error=f"{type(exc).__name__}: {exc}"[:2000],
-            finished_at=timezone.now(), text="",
+            finished_at=timezone.now(), text="", input_blocks=[],
         )
-        notify_failure(jobs[0], bot=bot)
+        if jobs[0].channel == "email":
+            from .email import notify_email_failure
+            jobs[0].error = f"{type(exc).__name__}: {exc}"[:2000]
+            try:
+                notify_email_failure(jobs[0], gmail_service=gmail_service)
+            except Exception:
+                logger.exception("Failed to notify email job %s", jobs[0].id)
+        else:
+            notify_failure(jobs[0], bot=bot)
         return
     AgentJob.objects.filter(id__in=ids).update(
-        status=AgentJob.Status.DONE, error="", finished_at=timezone.now(), text=""
+        status=AgentJob.Status.DONE, error="", finished_at=timezone.now(), text="", input_blocks=[]
     )

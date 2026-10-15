@@ -467,6 +467,18 @@ There are no new packages. Leave the flag false to disable native changes.
 Uncertain executions are recorded and never automatically retried; inspect
 AgentProposal.result and AuditLog before attempting a new proposal.
 
+### Agent email channel (phase 3)
+
+Migration `0014_agent_email` adds email-thread identity, RFC message/loop-guard
+headers, and idempotent incoming-email jobs with delivery state. No new packages.
+After the normal reviewed deployment, add `AGENT_EMAIL_ENABLED=true` to the
+shared environment file and retain `AGENT_PROPOSALS_ENABLED=true` for writes.
+Ensure `GOOGLE_ASSISTANT_EMAIL` and both `AUTHORISED_EMAIL_*` values are correct.
+The existing Gmail timer queues work; the existing agent worker sends replies.
+Restart `lifeassistant-web` and `lifeassistant-agent`; the next Gmail oneshot
+reads the updated environment automatically. No new timer or restart of an
+idle oneshot is necessary.
+
 ## 20. Running the first live email test
 
 1. Authenticate the assistant Google account **against production data**:

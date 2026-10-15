@@ -10,7 +10,7 @@ from django.conf import settings
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
-from core.models import AuditLog, IncomingEmail, ParsedAction
+from core.models import AgentJob, AuditLog, IncomingEmail, ParsedAction
 from assistant.services.email_parser import ParsedEmail, parse_email_message
 from assistant.services.email_sender import send_batch_confirmation
 from assistant.services.extractor import extract_actions
@@ -47,6 +47,9 @@ def _all_labels():
 def _save_incoming_email(existing: IncomingEmail | None, message_id: str, thread_id: str, parsed: ParsedEmail) -> IncomingEmail:
     fields = dict(
         gmail_thread_id=thread_id,
+        rfc_message_id=parsed.rfc_message_id,
+        auto_submitted=parsed.auto_submitted,
+        precedence=parsed.precedence,
         outer_sender=parsed.from_addr,
         recipients=", ".join(parsed.to_addrs),
         subject=parsed.subject,
@@ -132,13 +135,18 @@ def _run_extraction_and_gate(incoming_email: IncomingEmail) -> list[dict]:
     return results
 
 
-def process_incoming_email(incoming_email: IncomingEmail, gmail_service: GmailService | None = None, label_map: dict | None = None) -> None:
+def process_incoming_email(incoming_email: IncomingEmail, gmail_service: GmailService | None = None, label_map: dict | None = None, attachment_contents: list | None = None) -> None:
     """Reusable orchestrator: authorisation -> extraction -> validation ->
     auto-create gate -> calendar event or review -> reply -> label -> audit.
     Used by poll_gmail, retry_email, and the admin 'retry_selected_actions'
     action so idempotency and sender validation are never bypassed."""
     gmail_service = gmail_service or GmailService()
     label_map = label_map or gmail_service.ensure_labels(_all_labels())
+
+    if settings.AGENT_EMAIL_ENABLED and incoming_email.outer_sender.strip().lower() == settings.GOOGLE_ASSISTANT_EMAIL.strip().lower():
+        from assistant.agent.email import enqueue_email
+        enqueue_email(incoming_email, gmail_service, label_map, [])
+        return
 
     if not is_authorised_sender(incoming_email.outer_sender):
         incoming_email.status = IncomingEmail.Status.UNAUTHORISED
@@ -158,6 +166,12 @@ def process_incoming_email(incoming_email: IncomingEmail, gmail_service: GmailSe
             details={"outer_sender": incoming_email.outer_sender},
         )
         return
+
+    if settings.AGENT_EMAIL_ENABLED:
+        from assistant.agent.email import enqueue_email, sender_role
+        if sender_role(incoming_email.outer_sender) is not None or incoming_email.outer_sender.lower() == settings.GOOGLE_ASSISTANT_EMAIL.lower():
+            enqueue_email(incoming_email, gmail_service, label_map, attachment_contents or [])
+            return
 
     incoming_email.status = IncomingEmail.Status.PROCESSING
     incoming_email.save(update_fields=["status"])
@@ -256,11 +270,14 @@ class Command(BaseCommand):
             ):
                 continue  # already handled; never reprocess automatically
 
+            if existing and AgentJob.objects.filter(incoming_email=existing).exists():
+                continue
             raw_bytes, thread_id = gmail_service.get_message_raw(message_id)
-            parsed = parse_email_message(raw_bytes)
+            parsed = parse_email_message(raw_bytes, include_attachment_content=settings.AGENT_EMAIL_ENABLED)
 
             incoming_email = _save_incoming_email(existing, message_id, thread_id, parsed)
 
-            process_incoming_email(incoming_email, gmail_service=gmail_service, label_map=label_map)
+            process_incoming_email(incoming_email, gmail_service=gmail_service, label_map=label_map,
+                                   attachment_contents=parsed.attachment_contents)
 
         self.stdout.write(self.style.SUCCESS("Done."))

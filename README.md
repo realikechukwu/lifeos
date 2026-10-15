@@ -166,7 +166,19 @@ extraction flow already in progress behave exactly as before.
   with a 1-hour TTL; every reply logs its token and cache usage, visible per
   thread in Django admin under Agent threads.
 
-Leaving `AGENT_ENABLED` off keeps the original behaviour.
+Leaving `AGENT_ENABLED` off keeps the original Telegram behaviour.
+
+Set `AGENT_EMAIL_ENABLED=true` to route authorised emails from either adult to
+this worker, continuing one conversation per Gmail thread. Leave it false for
+the original extractor. With `AGENT_PROPOSALS_ENABLED=true`, clear creates and
+task completions execute immediately, as with the original email assistant.
+Task updates, reschedules and cancellations require a later reply of `YES`
+(or `YES <proposal id>` when several are pending), from the requesting person.
+Forwarded/quoted text is labelled as untrusted data. The worker passes PDF,
+JPEG and PNG attachments to Claude within a combined 10 MB allowance; other
+files are mentioned by name. Replies go to the outer sender, with optional CC
+restricted to the other configured household address. Automated/list mail and
+mail from the assistant itself cannot start an agent conversation.
 
 ### Scheduled Telegram briefings
 
