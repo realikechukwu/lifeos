@@ -27,6 +27,7 @@ from .loop import PROMPT_VERSION, append_input, run_turn
 from .tools import ToolContext
 from .documents import send_telegram_documents, upload_context
 from .proposals import context_outcomes, send_cards
+from .briefings import SCHEDULED_NOTE
 
 logger = logging.getLogger(__name__)
 
@@ -178,7 +179,7 @@ def process_telegram_jobs(jobs: list[AgentJob], *, bot: TelegramBot | None = Non
                 {"role": AgentMessage.Role.USER, "content": blocks if any(j.input_blocks for j in jobs) else [{"type": "text", "text": text}]},
                 {
                     "role": AgentMessage.Role.SYSTEM,
-                    "content": build_context_note(thread=thread, chat=chat, user=user, first_turn=first_turn) + ("\n" + outcome_note if outcome_note else "") + "\n" + upload_note,
+                    "content": build_context_note(thread=thread, chat=chat, user=user, first_turn=first_turn) + ("\n" + SCHEDULED_NOTE if job.briefing_type else "") + ("\n" + outcome_note if outcome_note else "") + "\n" + upload_note,
                 },
             ])
             AgentOutcome.objects.filter(id__in=outcome_ids).update(delivered_at=timezone.now())
