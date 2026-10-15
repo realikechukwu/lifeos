@@ -49,7 +49,12 @@ def claim_next_jobs() -> list[AgentJob]:
         return []
     # A retried job already has its input in a thread; don't merge new messages into it.
     siblings = []
-    if first.thread_id is None and first.channel == "telegram":
+    if first.reply_metadata.get("batch_id"):
+        siblings = list(AgentJob.objects.filter(
+            status=AgentJob.Status.QUEUED,
+            reply_metadata__batch_id=first.reply_metadata["batch_id"],
+        ).exclude(pk=first.pk).values_list("id", flat=True))
+    elif first.thread_id is None and first.channel == "telegram":
         siblings = list(
             AgentJob.objects.filter(
                 status=AgentJob.Status.QUEUED,

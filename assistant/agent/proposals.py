@@ -85,9 +85,7 @@ def _future(day, clock):
     if when <= timezone.now():
         raise ToolInputError("The requested time must be in the future.")
     # ZoneInfo accepts imaginary local times during the spring clock change.
-    if timezone.localtime(when.astimezone(timezone.get_default_timezone()).astimezone(
-        dt_timezone.utc
-    )).replace(tzinfo=None) != datetime.combine(day, clock):
+    if timezone.localtime(when.astimezone(dt_timezone.utc)).replace(tzinfo=None) != datetime.combine(day, clock):
         raise ToolInputError("That local time does not exist because the clocks change.")
 
 
@@ -217,16 +215,17 @@ def summary(proposal):
     lines = [f"Proposal {proposal.id}: {proposal.get_kind_display()}", p.get("title", "")]
     for key, label in (
         ("appointment_date", "Date"), ("start_time", "Start"), ("end_time", "End"),
-        ("location", "Location"), ("meeting_url", "Meeting link"), ("description", "Details"),
+        ("location", "Location"), ("meeting_url", "Meeting link"),
         ("assigned_to", "For"), ("due_date", "Due"), ("reminder_date", "Reminder date"),
         ("reminder_time", "Reminder time"), ("reminder_recipient", "Reminder for"),
         ("reminder_lead_days", "Reminder days before"), ("recurrence_frequency", "Repeats"),
         ("recurrence_interval", "Every"), ("recurrence_days_of_week", "Weekdays"),
         ("recurrence_until", "Until"), ("recurrence_count", "Occurrences"),
+        ("description", "Details"),
     ):
         if p.get(key) is not None and p.get(key) != "":
             value = str(p[key])
-            lines.append(f"{label}: {value[:1500]}")
+            lines.append(f"{label}: {value[:1500]}" + ("… (preview)" if len(value) > 1500 else ""))
     if p.get("all_day"):
         lines.append("All day")
     if p.get("notify_both"):

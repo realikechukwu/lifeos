@@ -221,7 +221,9 @@ def parse_email_message(raw_bytes: bytes, *, include_attachment_content: bool = 
             if include_attachment_content:
                 metadata = attachments[-1]
                 content = part.get_payload(decode=True) or b""
-                supported = metadata["mime_type"] in {"application/pdf", "image/jpeg", "image/png"}
+                supported = metadata["mime_type"] in {"application/pdf", "image/jpeg", "image/png"} or (
+                    settings.AGENT_DOCUMENTS_ENABLED and metadata["mime_type"] == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                )
                 if supported and len(content) <= remaining:
                     attachment_contents.append({**metadata, "data": base64.b64encode(content).decode("ascii")})
                     remaining -= len(content)

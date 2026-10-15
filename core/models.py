@@ -852,3 +852,75 @@ class AgentOutcome(models.Model):
 
     class Meta:
         ordering = ["id"]
+
+
+class AgentUpload(models.Model):
+    """An extracted source kept with the job, never supplied back by the model."""
+
+    job = models.ForeignKey(AgentJob, on_delete=models.CASCADE, related_name="uploads")
+    role = models.CharField(max_length=20, choices=HouseholdMember.Role.choices)
+    filename = models.CharField(max_length=255)
+    mime_type = models.CharField(max_length=100)
+    text = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-id"]
+
+
+class ProfileDocument(models.Model):
+    class Kind(models.TextChoices):
+        CV = "cv", "CV"
+        COVER_LETTER = "cover_letter", "Cover letter"
+        EXPERIENCE = "experience", "Experience"
+        OTHER = "other", "Other"
+
+    role = models.CharField(max_length=20, choices=HouseholdMember.Role.choices)
+    title = models.CharField(max_length=255)
+    kind = models.CharField(max_length=20, choices=Kind.choices)
+    text = models.TextField()
+    source_filename = models.CharField(max_length=255)
+    source_upload = models.ForeignKey(AgentUpload, on_delete=models.SET_NULL, null=True, blank=True)
+    active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-updated_at", "-id"]
+
+
+class GeneratedDocument(models.Model):
+    role = models.CharField(max_length=20, choices=HouseholdMember.Role.choices)
+    thread = models.ForeignKey(AgentThread, on_delete=models.CASCADE, related_name="generated_documents")
+    job = models.ForeignKey(AgentJob, on_delete=models.SET_NULL, null=True, blank=True)
+    title = models.CharField(max_length=255)
+    filename = models.CharField(max_length=255)
+    content = models.TextField()
+    # Private DB storage avoids a publicly served media directory and server setup.
+    data = models.BinaryField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-id"]
+
+
+class AgentEmailDelivery(models.Model):
+    """A reservation counts toward the daily limit even if delivery is uncertain."""
+
+    role = models.CharField(max_length=20, choices=HouseholdMember.Role.choices)
+    day = models.DateField()
+    slot = models.PositiveSmallIntegerField()
+    message_id = models.CharField(max_length=100, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["role", "day", "slot"], name="agent_email_daily_slot")]
+
+
+class AgentDocumentDelivery(models.Model):
+    job = models.ForeignKey(AgentJob, on_delete=models.CASCADE, related_name="document_deliveries")
+    document = models.ForeignKey(GeneratedDocument, on_delete=models.CASCADE)
+    sent_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["job", "document"], name="agent_one_document_per_job")]

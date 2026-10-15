@@ -12,6 +12,9 @@ from assistant.services.gmail import GmailService, is_authorised_sender
 from .loop import append_input, run_turn
 from .proposals import context_outcomes, summary
 from .tools import ToolContext
+from .documents import DOCX_MIME, PDF_MIME, add_upload, attachments_for_job, upload_context
+from .proposals import ToolInputError
+import base64
 
 
 def sender_role(address):
@@ -36,6 +39,8 @@ def attachment_blocks(contents):
     blocks = []
     for attachment in contents:
         mime = attachment["mime_type"]
+        if mime == DOCX_MIME:
+            continue
         blocks.append({"type": "text", "text": f"Untrusted attachment: {attachment['filename']}"})
         blocks.append({
             "type": "document" if mime == "application/pdf" else "image",
@@ -58,10 +63,22 @@ def enqueue_email(incoming, gmail_service, label_map, contents):
     if names:
         body += f"\n\nAttachment names (untrusted): {names}. Unsupported or oversized files are names only."
     with transaction.atomic():
-        AgentJob.objects.get_or_create(incoming_email=incoming, defaults={
+        job, created = AgentJob.objects.get_or_create(incoming_email=incoming, defaults={
             "channel": "email", "text": instruction,
             "input_blocks": [{"type": "text", "text": body}] + attachment_blocks(contents),
         })
+        if created and settings.AGENT_DOCUMENTS_ENABLED:
+            for attachment in contents:
+                if attachment["mime_type"] not in {DOCX_MIME, PDF_MIME}:
+                    continue
+                try:
+                    upload = add_upload(job, role=sender_role(incoming.outer_sender), filename=attachment["filename"],
+                                        mime_type=attachment["mime_type"], data=base64.b64decode(attachment["data"], validate=True))
+                    if attachment["mime_type"] == DOCX_MIME:
+                        job.input_blocks.append({"type": "text", "text": f"Untrusted DOCX {upload.filename}:\n{upload.text}"})
+                except (ToolInputError, ValueError) as exc:
+                    job.input_blocks.append({"type": "text", "text": f"Attachment text extraction failed: {exc}"})
+            job.save(update_fields=["input_blocks"])
         incoming.status = IncomingEmail.Status.PROCESSING
         incoming.save(update_fields=["status"])
 
@@ -115,14 +132,14 @@ def process_email_job(job, *, client=None, gmail_service=None):
             outcomes, ids = context_outcomes(thread)
             append_input(thread, [
                 {"role": "user", "content": job.input_blocks},
-                {"role": "system", "content": _context(thread, incoming, role) + ("\n" + outcomes if outcomes else "")},
+                {"role": "system", "content": _context(thread, incoming, role) + ("\n" + outcomes if outcomes else "") + "\n" + upload_context(ToolContext(role=role, speaker_name=role, thread=thread, job=job))},
             ])
             AgentOutcome.objects.filter(id__in=ids).update(delivered_at=timezone.now())
             AgentJob.objects.filter(pk=job.pk).update(thread=thread)
             job.thread = thread
     if not job.reply_text:
         ctx = ToolContext(role=role, speaker_name="Ike" if role == "ike" else "Ike's wife",
-                          thread=thread, channel="email", incoming_email=incoming,
+                          thread=thread, job=job, channel="email", incoming_email=incoming,
                           newest_instruction=job.text, gmail_service=gmail)
         result = run_turn(thread, ctx, client=client)
         recorded = []
@@ -141,10 +158,15 @@ def process_email_job(job, *, client=None, gmail_service=None):
         AgentJob.objects.filter(pk=job.pk).update(reply_text=job.reply_text, reply_metadata=job.reply_metadata)
     cc = _resolve_confirmation_cc(incoming, SimpleNamespace(notify_both=job.reply_metadata.get("notify_both", False)))
     if not job.sent_reply_id:
-        sent = gmail.send_reply(**_reply_kwargs(incoming), cc_addr=cc, body_text=job.reply_text)
+        reply_args = {**_reply_kwargs(incoming), "cc_addr": cc, "body_text": job.reply_text}
+        attachments = attachments_for_job(job)
+        if attachments:
+            reply_args["attachments"] = attachments
+        sent = gmail.send_reply(**reply_args)
         job.sent_reply_id = sent or "sent"
         AgentJob.objects.filter(pk=job.pk).update(sent_reply_id=job.sent_reply_id)
         thread.proposals.filter(pk__in=job.reply_metadata.get("proposal_ids", []), status="pending").update(confirmation_email=incoming)
+        job.document_deliveries.update(sent_at=timezone.now())
     incoming.status = IncomingEmail.Status.PROCESSED
     incoming.processing_attempts += 1
     incoming.save(update_fields=["status", "processing_attempts"])

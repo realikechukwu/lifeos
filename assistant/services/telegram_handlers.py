@@ -2153,6 +2153,11 @@ def process_telegram_update(payload: dict, *, bot: TelegramBot | None = None) ->
                         chat=chat, user=user, text=text, update_id=update_id, bot=bot,
                         addressed=addressed, message_id=message.get("message_id"),
                     )
+            elif (message.get("document") and chat.authorised
+                  and chat.chat_type == TelegramChat.ChatType.PRIVATE
+                  and settings.AGENT_ENABLED and settings.AGENT_DOCUMENTS_ENABLED):
+                from assistant.agent.documents import handle_telegram_document
+                handle_telegram_document(message, chat, user, update_id, bot)
             elif (
                 message.get("voice") and chat.authorised
                 and (

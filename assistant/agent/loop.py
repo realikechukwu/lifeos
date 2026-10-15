@@ -15,7 +15,7 @@ from django.utils import timezone
 from core.models import AgentMessage, AgentThread
 
 from .prompts import SYSTEM_PROMPT
-from .tools import HANDLERS, TOOL_DEFINITIONS, ToolContext, ToolInputError
+from .tools import HANDLERS, ACTIVE_TOOL_DEFINITIONS, ToolContext, ToolInputError
 
 logger = logging.getLogger(__name__)
 
@@ -23,10 +23,17 @@ logger = logging.getLogger(__name__)
 CACHE_CONTROL = {"type": "ephemeral", "ttl": "1h"}
 SYSTEM_BLOCKS = [{"type": "text", "text": SYSTEM_PROMPT, "cache_control": CACHE_CONTROL}]
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
-MAX_TOKENS = 16000
+MAX_TOKENS = 32000
 
 REFUSAL_REPLY = "Sorry, I can't help with that one."
-INTERRUPTED_RESULT = "This tool call was interrupted before it finished and was not run."
+INTERRUPTED_RESULT = (
+    "This tool call was interrupted. A write may already have run; do not repeat writes "
+    "automatically. Check recorded outcomes or ask the speaker first. Read-only lookups can be retried."
+)
+READ_ONLY_TOOLS = {
+    "get_calendar", "list_tasks", "list_reminders", "search_notes",
+    "list_profile_documents", "read_profile_document", "list_generated_documents",
+}
 
 
 @dataclass
@@ -64,11 +71,11 @@ def _append(thread: AgentThread, role: str, content: list, response=None) -> dic
     return {"role": role, "content": content}
 
 
-def _close_dangling_tool_calls(thread: AgentThread, history: list[dict]) -> None:
+def _close_dangling_tool_calls(thread: AgentThread, history: list[dict]) -> bool:
     """If a previous attempt died between a tool call and its result, record
-    the call as not run so the history is valid to send again."""
+    an uncertain result so the history is valid to send again."""
     if not history or history[-1]["role"] != AgentMessage.Role.ASSISTANT:
-        return
+        return False
     pending = [b for b in history[-1]["content"] if b.get("type") == "tool_use"]
     if pending:
         results = [
@@ -76,6 +83,7 @@ def _close_dangling_tool_calls(thread: AgentThread, history: list[dict]) -> None
             for b in pending
         ]
         history.append(_append(thread, AgentMessage.Role.USER, results))
+    return any(b.get("name") not in READ_ONLY_TOOLS for b in pending)
 
 
 def _run_tool(ctx: ToolContext, block) -> dict:
@@ -113,16 +121,16 @@ def run_turn(thread: AgentThread, ctx: ToolContext, *, client=None) -> TurnResul
     """Run Claude on the thread as it stands until it answers."""
     client = client or _client()
     history = _history(thread)
-    _close_dangling_tool_calls(thread, history)
+    uncertain_write = _close_dangling_tool_calls(thread, history)
 
-    max_rounds = settings.AGENT_MAX_TOOL_ROUNDS
+    max_rounds = 0 if uncertain_write else settings.AGENT_MAX_TOOL_ROUNDS
     tool_rounds = 0
     for _ in range(max_rounds + 5):  # tool rounds plus a few server-side pauses
         params = dict(
             model=settings.AGENT_MODEL,
             max_tokens=MAX_TOKENS,
             system=SYSTEM_BLOCKS,
-            tools=TOOL_DEFINITIONS,
+            tools=ACTIVE_TOOL_DEFINITIONS,
             messages=history,
             cache_control=CACHE_CONTROL,
             thinking={"type": "adaptive"},
@@ -133,7 +141,8 @@ def run_turn(thread: AgentThread, ctx: ToolContext, *, client=None) -> TurnResul
         if tool_rounds >= max_rounds:
             # Out of tool budget: the model must answer with what it has.
             params["tool_choice"] = {"type": "none"}
-        response = client.beta.messages.create(**params)
+        with client.beta.messages.stream(**params) as stream:
+            response = stream.get_final_message()
         content = [block.to_dict(mode="json") for block in response.content]
         history.append(_append(thread, AgentMessage.Role.ASSISTANT, content, response))
         thread.last_activity_at = timezone.now()

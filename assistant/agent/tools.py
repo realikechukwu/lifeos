@@ -15,8 +15,11 @@ from datetime import date, timedelta
 
 from django.db.models import Q
 
-from core.models import AgentMemory, AgentThread, IncomingEmail, Note, Reminder, Task, TelegramChat, TelegramUser
+from django.conf import settings
+
+from core.models import AgentJob, AgentMemory, AgentThread, IncomingEmail, Note, Reminder, Task, TelegramChat, TelegramUser
 from .proposals import ToolInputError, HANDLERS as PROPOSAL_HANDLERS, tool_definitions, confirm_proposal, CONFIRM_DEFINITION
+from .documents import HANDLERS as DOCUMENT_HANDLERS, TOOL_DEFINITIONS as DOCUMENT_TOOLS
 
 from assistant.services.google_calendar import list_calendar_events
 from assistant.services.telegram_inbox import calendar_items_between
@@ -36,6 +39,7 @@ class ToolContext:
     telegram_update_id: int | None = None
     bot: object | None = None
     thread: AgentThread | None = None
+    job: AgentJob | None = None
     channel: str = "telegram"
     incoming_email: IncomingEmail | None = None
     newest_instruction: str = ""
@@ -250,7 +254,14 @@ _DEFINITIONS = [
     },
 ]
 
-TOOL_DEFINITIONS = sorted(_DEFINITIONS + tool_definitions() + [CONFIRM_DEFINITION], key=lambda tool: tool["name"])
+WEB_TOOLS = [
+    {"type": "web_search_20260209", "name": "web_search", "max_uses": 5},
+    {"type": "web_fetch_20260209", "name": "web_fetch", "max_uses": 5},
+]
+TOOL_DEFINITIONS = sorted(_DEFINITIONS + tool_definitions() + [CONFIRM_DEFINITION] + DOCUMENT_TOOLS + WEB_TOOLS, key=lambda tool: tool["name"])
+# Server tools execute remotely: exclude them at startup when disabled. Every
+# call in this worker uses this same list, regardless of speaker or channel.
+ACTIVE_TOOL_DEFINITIONS = TOOL_DEFINITIONS if settings.AGENT_WEB_ENABLED else [t for t in TOOL_DEFINITIONS if t not in WEB_TOOLS]
 
 HANDLERS = {
     "confirm_proposal": lambda ctx, args: _dumps(confirm_proposal(ctx, args)),
@@ -260,6 +271,6 @@ HANDLERS = {
     "list_tasks": list_tasks,
     "remember": remember,
     **{name: (lambda ctx, args, handler=handler: _dumps(handler(ctx, args)))
-       for name, handler in PROPOSAL_HANDLERS.items()},
+       for name, handler in {**PROPOSAL_HANDLERS, **DOCUMENT_HANDLERS}.items()},
     "search_notes": search_notes,
 }
