@@ -161,6 +161,22 @@ class GmailService:
         """Send a fresh (non-reply) plain-text message — used for reminder
         notifications, which are not part of any existing thread. `to_addr`
         may be a comma-separated list for a "both" recipient."""
+        return self.send_new_thread(
+            to_addr=to_addr, subject=subject, body_text=body_text,
+            message_id_header=message_id_header, attachments=attachments,
+        )[0]
+
+    def send_new_thread(
+        self,
+        *,
+        to_addr: str,
+        subject: str,
+        body_text: str,
+        message_id_header: str | None = None,
+        attachments: list | None = None,
+    ) -> tuple[str, str]:
+        """Like send_message, but returns (message id, Gmail thread id) so a
+        reply to it can be matched back to the conversation that sent it."""
         message = _mime_message(body_text, attachments)
         message["To"] = to_addr
         message["Subject"] = subject
@@ -169,4 +185,4 @@ class GmailService:
 
         raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
         sent = self._service.users().messages().send(userId="me", body={"raw": raw}).execute()
-        return sent.get("id", "")
+        return sent.get("id", ""), sent.get("threadId", "")

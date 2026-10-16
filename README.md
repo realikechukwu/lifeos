@@ -227,6 +227,27 @@ anything worth adding. They arrive in the private chat, so you can reply to
 them. The prompts live in `assistant/agent/briefings.py`. If the agent fails,
 the template briefing is sent instead. The monthly briefing stays a template.
 
+**Weekly email.** With `WEEKLY_EMAIL_ENABLED=true`, each adult gets a
+week-ahead email at 16:00 on Sunday (Monday to Sunday), sent to their
+`AUTHORISED_EMAIL_*` address. It replaces the Sunday 18:00 Telegram plan; the
+daily and monthly Telegram briefings are unchanged. Each email has two parts:
+
+- **For both of you**: day by day (including shifts), clashes and coordination
+  gaps, deadlines and bills, and time together. It is written once per week
+  from the calendar, tasks and reminders only (no inbox, no saved memories),
+  so both emails carry exactly the same text.
+- **From your inbox**: only when that person's personal inbox is connected.
+  The agent reviews their own last 7 days of email and lists what needs them,
+  with suggested additions. It never reads the other adult's inbox, and this
+  part goes only to its owner. Nothing is created automatically.
+
+With `AGENT_EMAIL_ENABLED=true`, replying to the email continues the same
+agent conversation, so "add 1 and 3" works. If the agent fails, the email is
+still sent with the template week-ahead digest. With `AGENT_ENABLED` off, both
+adults get the template version. The prompts live in
+`assistant/agent/weekly_email.py`; `send_telegram_briefings` (already on its
+every-minute timer) schedules it, and the agent worker writes it.
+
 ### Scheduled Telegram briefings
 
 After an authorised user has started the bot privately, LifeOS sends a daily
@@ -239,7 +260,8 @@ per-user/type/day record prevents duplicates.
 The same runner also sends two planning digests in the app's configured local
 timezone:
 
-- Every Sunday at 18:00, a week-ahead digest covering Monday through Sunday.
+- Every Sunday at 18:00, a week-ahead digest covering Monday through Sunday
+  (not sent when the weekly email is switched on; see above).
 - On the first Sunday of each month at 09:30, a month-ahead digest covering the
   next day through the day before the same date in the next calendar month.
 
