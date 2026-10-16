@@ -89,7 +89,10 @@ def _is_transient(exc: Exception) -> bool:
 def run_jobs(jobs: list[AgentJob], *, bot=None, client=None, gmail_service=None) -> None:
     ids = [job.id for job in jobs]
     try:
-        if jobs[0].channel == "email":
+        if jobs[0].channel == "email" and jobs[0].briefing_type:
+            from .weekly_email import process_weekly_email_job
+            process_weekly_email_job(jobs[0], client=client, gmail_service=gmail_service)
+        elif jobs[0].channel == "email":
             from .email import process_email_job
             process_email_job(jobs[0], client=client, gmail_service=gmail_service)
         else:
@@ -104,7 +107,13 @@ def run_jobs(jobs: list[AgentJob], *, bot=None, client=None, gmail_service=None)
             status=AgentJob.Status.FAILED, error=f"{type(exc).__name__}: {exc}"[:2000],
             finished_at=timezone.now(), text="", input_blocks=[],
         )
-        if jobs[0].channel == "email":
+        if jobs[0].channel == "email" and jobs[0].briefing_type:
+            from .weekly_email import send_weekly_email_fallback
+            try:
+                send_weekly_email_fallback(jobs[0], gmail_service=gmail_service)
+            except Exception:
+                logger.exception("Fallback failed for weekly email job %s", jobs[0].id)
+        elif jobs[0].channel == "email":
             from .email import notify_email_failure
             jobs[0].error = f"{type(exc).__name__}: {exc}"[:2000]
             try:

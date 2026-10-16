@@ -500,6 +500,21 @@ class TelegramBriefingDelivery(models.Model):
         return f"Telegram {self.briefing_type} briefing for {self.user} on {self.briefing_date}"
 
 
+class WeeklyEmailBriefing(models.Model):
+    """Idempotency record for the Sunday week-ahead email, plus the household
+    section written once so both adults receive exactly the same text."""
+
+    week_start = models.DateField(unique=True)
+    shared_text = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-week_start"]
+
+    def __str__(self):
+        return f"Weekly email for the week of {self.week_start}"
+
+
 class TelegramChat(models.Model):
     class ChatType(models.TextChoices):
         PRIVATE = "private", "Private"

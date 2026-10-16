@@ -231,6 +231,8 @@ AGENT_WEB_ENABLED = _bool_env("AGENT_WEB_ENABLED", False)
 AGENT_PERSONAL_INBOX_ENABLED = _bool_env("AGENT_PERSONAL_INBOX_ENABLED", False)
 # The agent writes the daily brief and Sunday week-ahead plan (template fallback).
 AGENT_BRIEFINGS_ENABLED = _bool_env("AGENT_BRIEFINGS_ENABLED", False)
+# Sunday 16:00 week-ahead email to each adult (replaces the Sunday Telegram plan).
+WEEKLY_EMAIL_ENABLED = _bool_env("WEEKLY_EMAIL_ENABLED", False)
 PERSONAL_GMAIL_IKE = os.environ.get("PERSONAL_GMAIL_IKE", "")
 PERSONAL_GMAIL_WIFE = os.environ.get("PERSONAL_GMAIL_WIFE", "")
 AGENT_MODEL = os.environ.get("AGENT_MODEL", "claude-sonnet-5-5")

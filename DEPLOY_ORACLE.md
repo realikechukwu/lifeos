@@ -243,7 +243,9 @@ comments in each `.service` file).
 
 The Telegram command uses `APP_TIMEZONE` to send the configurable daily
 briefing, a month-ahead plan at 09:30 on the first Sunday (Sunday with local
-day 1–7), and a week-ahead plan at 18:00 every Sunday. Leave its timer on the
+day 1–7), and a week-ahead plan at 18:00 every Sunday (or, with
+`WEEKLY_EMAIL_ENABLED=true`, the week-ahead email at 16:00 instead; the agent
+worker must be running for its agent-written version). Leave its timer on the
 every-minute schedule so these guards remain correct across London daylight-
 saving changes; no separate cron entries are needed.
 

@@ -1,4 +1,5 @@
-"""Send due daily, weekly, and monthly private LifeOS Telegram briefings."""
+"""Send due daily, weekly, and monthly private LifeOS Telegram briefings,
+and the Sunday week-ahead email when it is switched on."""
 
 from dataclasses import dataclass
 from datetime import date, time, timedelta
@@ -10,6 +11,7 @@ from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from assistant.agent.briefings import enqueue_briefing
+from assistant.agent.weekly_email import send_due_weekly_emails
 from assistant.services.telegram import TelegramBot
 from assistant.services.telegram_handlers import (
     build_planning_message,
@@ -44,7 +46,12 @@ def due_briefings(preference: TelegramPreference, local_now) -> list[DueBriefing
     due = []
     if _same_minute(preference.briefing_time, local_time):
         due.append(DueBriefing(TelegramBriefingDelivery.BriefingType.DAILY, local_date))
-    if local_date.weekday() == 6 and _same_minute(WEEKLY_BRIEFING_TIME, local_time):
+    # The Sunday week-ahead email replaces this plan when it is switched on.
+    if (
+        local_date.weekday() == 6
+        and not settings.WEEKLY_EMAIL_ENABLED
+        and _same_minute(WEEKLY_BRIEFING_TIME, local_time)
+    ):
         start_date = local_date + timedelta(days=1)
         due.append(
             DueBriefing(
@@ -135,5 +142,8 @@ class Command(BaseCommand):
     help = "Send due daily, weekly, and monthly private Telegram LifeOS briefings."
 
     def handle(self, *args, **options):
+        emailed, email_failed = send_due_weekly_emails()
+        if emailed or email_failed:
+            self.stdout.write(f"Queued or sent {emailed} weekly email(s). {email_failed} failed.")
         sent, failed = send_due_briefings()
         self.stdout.write(f"Sent {sent} Telegram briefing(s). {failed} failed.")
