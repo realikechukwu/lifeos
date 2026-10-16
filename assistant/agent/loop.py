@@ -66,7 +66,12 @@ def _client() -> anthropic.Anthropic:
 
 
 def _history(thread: AgentThread) -> list[dict]:
-    return [{"role": m.role, "content": m.content} for m in thread.messages.all()]
+    # Older rows have no content_json; their reordered content is what later
+    # turns already replayed, so it stays the cached form for them.
+    return [
+        {"role": m.role, "content": json.loads(m.content_json) if m.content_json else m.content}
+        for m in thread.messages.all()
+    ]
 
 
 def _append(thread: AgentThread, role: str, content: list, response=None) -> dict:
@@ -86,7 +91,9 @@ def _append(thread: AgentThread, role: str, content: list, response=None) -> dic
             thread.id, response.stop_reason, usage.input_tokens,
             fields["cache_read_tokens"], fields["cache_creation_tokens"], usage.output_tokens,
         )
-    AgentMessage.objects.create(thread=thread, role=role, content=content, **fields)
+    AgentMessage.objects.create(
+        thread=thread, role=role, content=content, content_json=json.dumps(content), **fields
+    )
     return {"role": role, "content": content}
 
 

@@ -285,6 +285,29 @@ class AgentWorkerTests(TestCase):
         self.assertEqual([m["role"] for m in messages], ["user", "system", "assistant", "user", "system"])
         self.assertNotIn("saved memories", messages[-1]["content"].lower())
 
+    @patch("assistant.agent.tools.list_calendar_events", return_value=[])
+    def test_follow_up_replays_tool_input_in_its_original_key_order(self, _list_events):
+        self._queue(25, "Am I free Friday?")
+        first = FakeClient(
+            reply(tool_use("get_calendar", {"start_date": "2026-10-16", "end_date": "2026-10-16", "search": ""}),
+                  stop_reason="tool_use"),
+            reply(text("Yes.")),
+        )
+        self._run(first)
+        # Postgres jsonb stores keys shortest-first; make SQLite do the same.
+        stored = AgentMessage.objects.get(role="assistant", stop_reason="tool_use")
+        block = stored.content[0]
+        stored.content = [{**block, "input": {"search": "", "end_date": "2026-10-16", "start_date": "2026-10-16"}}]
+        stored.save(update_fields=["content"])
+
+        self._queue(26, "And Saturday?")
+        client = FakeClient(reply(text("Also free.")))
+        self._run(client)
+
+        replayed = client.calls[0]["messages"][2]["content"][0]
+        self.assertEqual(replayed, first.calls[1]["messages"][2]["content"][0])
+        self.assertEqual(list(replayed["input"]), ["start_date", "end_date", "search"])
+
     def test_idle_thread_is_replaced(self):
         self._queue(23, "Hi")
         self._run(FakeClient(reply(text("Hello!"))))

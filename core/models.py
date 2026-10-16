@@ -744,6 +744,9 @@ class AgentMessage(models.Model):
     thread = models.ForeignKey(AgentThread, on_delete=models.CASCADE, related_name="messages")
     role = models.CharField(max_length=10, choices=Role.choices)
     content = models.JSONField(default=list)
+    # The exact JSON text sent or received. Postgres jsonb reorders object keys,
+    # so replaying `content` would change tool_use inputs and miss the prompt cache.
+    content_json = models.TextField(blank=True, default="")
     # Usage is recorded on assistant messages for cost and cache-hit tracking.
     model = models.CharField(max_length=64, blank=True, default="")
     stop_reason = models.CharField(max_length=30, blank=True, default="")
