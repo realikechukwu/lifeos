@@ -1,5 +1,7 @@
 import base64
+import http.server
 import json
+import threading
 from datetime import timedelta
 from io import BytesIO, StringIO
 from types import SimpleNamespace
@@ -71,6 +73,31 @@ def _call(name, args):
     return json.loads(HANDLERS[name](_ctx(), args))
 
 
+class ChunkedSupabase(http.server.BaseHTTPRequestHandler):
+    """Answers like the real Supabase: chunked bodies with no Content-Length."""
+    protocol_version = "HTTP/1.1"
+
+    def _send(self, body):
+        self.send_response(200)
+        self.send_header("Transfer-Encoding", "chunked")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        half = len(body) // 2
+        for chunk in (body[:half], body[half:]):
+            self.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
+        self.wfile.write(b"0\r\n\r\n")
+
+    def do_POST(self):
+        self.rfile.read(int(self.headers["Content-Length"]))
+        self._send(b'{"access_token": "token-1", "expires_in": 3600}')
+
+    def do_GET(self):
+        self._send(b'[{"id": "a"}]')
+
+    def log_message(self, *args):
+        pass
+
+
 @override_settings(**HOMEBASE_SETTINGS)
 class HomebaseClientTests(SimpleTestCase):
     def setUp(self):
@@ -120,6 +147,15 @@ class HomebaseClientTests(SimpleTestCase):
         self.assertEqual(homebase.storage_path(f"{base}/sign/documents/x/y.pdf?token=t", "documents"), "x/y.pdf")
         self.assertIsNone(homebase.storage_path(f"{base}/public/snag-photos/y.jpg", "documents"))
         self.assertIsNone(homebase.storage_path("", "documents"))
+
+    def test_reads_chunked_responses_from_a_real_server(self):
+        server = http.server.HTTPServer(("127.0.0.1", 0), ChunkedSupabase)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        with self.settings(HOMEBASE_SUPABASE_URL=f"http://127.0.0.1:{server.server_port}"):
+            self.assertEqual(homebase.select("snags", columns="id"), [{"id": "a"}])
+            self.assertEqual(homebase.download("documents", "a.pdf", max_bytes=100), b'[{"id": "a"}]')
 
     def test_download_stops_at_the_size_limit(self):
         fake = FakeSupabase(files={"big.pdf": b"x" * 11})

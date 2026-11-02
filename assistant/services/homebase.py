@@ -52,7 +52,8 @@ def _url(path: str, params: dict | None = None) -> str:
 def _open(request: Request, *, what: str, max_bytes: int | None = None) -> bytes:
     try:
         with urlopen(request, timeout=TIMEOUT_SECONDS) as response:  # noqa: S310 - configured Supabase host
-            data = response.read(max_bytes + 1 if max_bytes else -1)
+            # Never read(-1): on a chunked response it returns the chunk framing too.
+            data = response.read(max_bytes + 1) if max_bytes else response.read()
     except HTTPError as exc:
         # Do not chain urllib errors: the sign-in request body holds the password.
         raise HomebaseError(f"Homebase {what} failed with HTTP {exc.code}.") from None
