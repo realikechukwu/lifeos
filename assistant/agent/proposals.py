@@ -58,7 +58,10 @@ EDIT_FIELDS = {
 }
 # Validated, summarised and executed in assistant.agent.homebase, which
 # imports this module, so those hooks import it lazily.
-HOMEBASE_KINDS = {"homebase_create_snag", "homebase_update_snag", "homebase_update_document", "homebase_update_insurance"}
+HOMEBASE_KINDS = {
+    "homebase_create_snag", "homebase_update_snag", "homebase_update_document", "homebase_update_insurance",
+    "homebase_create_document", "homebase_create_memory_aid", "homebase_create_insurance",
+}
 MAX_NOTE_EDITS = 20
 MAX_EDIT_CHARS = 5000
 NOTE_EDIT_PROPERTIES = {
