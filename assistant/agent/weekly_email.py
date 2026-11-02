@@ -29,7 +29,8 @@ from core.models import AgentJob, AgentMemory, AgentMessage, AgentThread, Househ
 from assistant.services import personal_inbox
 from assistant.services.gmail import GmailService
 
-from .briefings import SCHEDULED_NOTE, WEEKLY
+from .briefings import SCHEDULED_NOTE, WEEKLY, WEEKLY_HOME_DAYS
+from .homebase import home_admin_note
 from .loop import FALLBACK_BETA, PROMPT_VERSION, _client, _text_of, append_input, run_turn
 from .tools import ToolContext, get_calendar, list_reminders, list_tasks
 
@@ -53,12 +54,12 @@ Open tasks (assigned_to says whose it is):
 
 Pending reminders:
 {reminders}
-
+{home}
 Think like a family chief of staff. Write plain text with no markdown (no asterisks or #). Use these parts, each label on its own line, leaving out any that would be empty:
 Day by day: one line per day with something on, e.g. "Mon 19: Ike late 15:00–23:00; dentist 16:00 (clash)".
 Watch out: clashes, early starts after a late or night shift, and coordination gaps such as childcare, school runs or transport when you're both busy, each with a suggested fix.
 Deadlines and bills: tasks and payments due this week, and anything overdue.
-Time together: the best windows for family or couple time.
+{home_part}Time together: the best windows for family or couple time.
 Keep it under 300 words. Mention nothing that isn't in the data. If nothing is scheduled, say so in one line."""
 
 PERSONAL_PROMPT = """Scheduled week-ahead email for {start:%A %-d %B} to {end:%A %-d %B %Y}.
@@ -76,6 +77,8 @@ Write only the next section, "From your inbox", from my own personal inbox. It i
 5. Apply my saved memories and standing rules.
 
 Plain text, no markdown. Use "- " for each item, one line each: who or what, the action, and by when. Never paste whole emails. Keep it under 200 words. If nothing needs me, say so in one line."""
+
+HOME_PART = "Home: each Homebase document expiring, policy renewing or urgent snag, with the date and what to do.\n"
 
 SUGGEST_WITH_REPLY = (
     'End with "Suggested additions:" and up to 5 numbered items, each with its date or deadline, '
@@ -162,6 +165,14 @@ def compose(role: str, week_start: date, shared: str, personal: str = "", *, inb
     return "\n".join(lines)
 
 
+def _home_parts() -> dict:
+    """Homebase dates for the shared section, or nothing when Homebase is off."""
+    note = home_admin_note(days=WEEKLY_HOME_DAYS, include_snags=True)
+    if not note:
+        return {"home": "", "home_part": ""}
+    return {"home": f"\n{note}\n", "home_part": HOME_PART}
+
+
 def write_shared(week_start: date, *, client=None) -> str:
     """One tool-less model call over calendar, tasks and reminders. No inbox,
     memories or other personal data are ever included."""
@@ -175,6 +186,7 @@ def write_shared(week_start: date, *, client=None) -> str:
         calendar=get_calendar(lookup, {"start_date": week_start.isoformat(), "end_date": end.isoformat()}),
         tasks=list_tasks(lookup, {}),
         reminders=list_reminders(lookup, {}),
+        **_home_parts(),
     )
     client = client or _client()
     with client.beta.messages.stream(

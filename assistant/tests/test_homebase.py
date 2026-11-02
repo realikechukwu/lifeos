@@ -16,10 +16,13 @@ from django.utils import timezone
 
 from assistant.agent.loop import READ_ONLY_TOOLS, _run_tool
 from assistant.agent.tools import ACTIVE_TOOL_DEFINITIONS, HANDLERS, TOOL_DEFINITIONS, ToolContext, ToolInputError
+from assistant.agent.briefings import DAILY, WEEKLY, briefing_prompt
+from assistant.agent.homebase import home_admin, home_admin_note
 from assistant.agent.proposals import decide, summary
+from assistant.agent.weekly_email import write_shared
 from assistant.services import homebase
 from assistant.services.telegram_handlers import process_telegram_update
-from assistant.tests.test_agent import AGENT_SETTINGS, AgentFakeBot
+from assistant.tests.test_agent import AGENT_SETTINGS, AgentFakeBot, FakeClient, reply, text
 from assistant.tests.test_telegram import message_update
 from core.models import AgentJob, AgentMessage, AgentProposal, AgentThread
 
@@ -567,3 +570,91 @@ class HomebaseProposalTests(TestCase):
         self.assertEqual(row["contents_excess"], 100.0)
         self.assertIsNone(row["buildings_excess"])
         self.assertNotIn("title", row)
+
+
+@override_settings(**AGENT_SETTINGS, **HOMEBASE_SETTINGS)
+class HomebaseBriefingTests(TestCase):
+    def setUp(self):
+        homebase._token.update(value="", expires_at=0.0, user_id="")
+        today = timezone.localdate()
+        day = lambda offset: str(today + timedelta(days=offset))
+        self.fake = FakeSupabase(tables={
+            "documents": [
+                {"title": "Gas safety certificate", "category": "property", "subcategory": None, "expiry_date": day(5)},
+                {"title": "EICR", "category": "property", "subcategory": None, "expiry_date": day(-10)},
+                {"title": "Old warranty", "category": "property", "subcategory": None, "expiry_date": day(-40)},
+                {"title": "TV licence", "category": "utility", "subcategory": None, "expiry_date": day(20)},
+                {"title": "Stopcock", "category": "property", "subcategory": "Memory Aid", "expiry_date": None},
+            ],
+            "insurance_summary": [
+                {"insurer_name": "Aviva", "policy_type": "home", "renewal_date": day(25)},
+                {"insurer_name": "Admiral", "policy_type": "car", "renewal_date": day(200)},
+            ],
+            "snags": [
+                {"title": "Boiler leaking", "room": "Utility", "status": "open", "severity": "critical"},
+                {"title": "Squeaky door", "room": "Hall", "status": "open", "severity": "low"},
+            ],
+        })
+        patcher = patch("assistant.services.homebase.urlopen", self.fake)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_week_ahead_window(self):
+        found = home_admin(days=30, include_snags=True)
+        self.assertEqual([d["title"] for d in found["documents_expiring"]], ["Gas safety certificate", "EICR", "TV licence"])
+        self.assertEqual([p["insurer"] for p in found["insurance_renewing"]], ["Aviva"])
+        self.assertEqual([s["title"] for s in found["urgent_snags"]], ["Boiler leaking"])
+        self.assertEqual(self.fake.queries("snags")[0]["status"], ["neq.resolved"])
+
+    def test_morning_window_skips_snags(self):
+        found = home_admin(days=7, include_snags=False)
+        self.assertEqual([d["title"] for d in found["documents_expiring"]], ["Gas safety certificate", "EICR"])
+        self.assertNotIn("insurance_renewing", found)
+        self.assertNotIn("urgent_snags", found)
+        self.assertFalse(self.fake.queries("snags"))
+
+    def test_off_or_unreachable_leaves_homebase_out(self):
+        with self.settings(AGENT_HOMEBASE_ENABLED=False):
+            self.assertIsNone(home_admin(days=30, include_snags=True))
+            self.assertEqual(home_admin_note(days=30, include_snags=True), "")
+
+        def down(request, timeout=None):
+            raise TimeoutError
+
+        with patch("assistant.services.homebase.urlopen", down):
+            self.assertIsNone(home_admin(days=30, include_snags=True))
+
+    def test_nothing_due_is_said_plainly(self):
+        self.fake.tables = {"documents": [], "insurance_summary": [], "snags": []}
+        self.assertIn("nothing due", home_admin_note(days=7, include_snags=False))
+
+    def test_briefing_prompts_carry_homebase_only_when_on(self):
+        today = timezone.localdate()
+        daily, weekly = briefing_prompt(DAILY, today), briefing_prompt(WEEKLY, today)
+        self.assertIn("Gas safety certificate", daily)
+        self.assertNotIn("TV licence", daily)
+        self.assertIn("**Home**:", daily)
+        self.assertIn("TV licence", weekly)
+        self.assertIn("Boiler leaking", weekly)
+        self.assertIn("**Home**:", weekly)
+        with self.settings(AGENT_HOMEBASE_ENABLED=False):
+            for prompt in (briefing_prompt(DAILY, today), briefing_prompt(WEEKLY, today)):
+                self.assertNotIn("Homebase", prompt)
+                self.assertNotIn("**Home**", prompt)
+                self.assertNotIn("\n\n\n", prompt)
+                self.assertNotIn("{", prompt)
+
+    @patch("assistant.agent.tools.list_calendar_events", return_value=[])
+    def test_weekly_email_shared_section_includes_home_admin(self, _calendar):
+        client = FakeClient(reply(text("Home: renew the gas safety certificate")))
+        write_shared(timezone.localdate(), client=client)
+        prompt = client.calls[0]["messages"][0]["content"][0]["text"]
+        self.assertIn("Aviva", prompt)
+        self.assertIn("Home: each Homebase document", prompt)
+
+        with self.settings(AGENT_HOMEBASE_ENABLED=False):
+            client = FakeClient(reply(text("Quiet week")))
+            write_shared(timezone.localdate(), client=client)
+        prompt = client.calls[0]["messages"][0]["content"][0]["text"]
+        self.assertNotIn("Homebase", prompt)
+        self.assertNotIn("\n\n\n", prompt)
