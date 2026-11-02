@@ -56,6 +56,9 @@ EDIT_FIELDS = {
     "cancel_event": {"event_id"}, "cancel_reminder": {"reminder_id"},
     "update_note": {"note_id", "edits", "append", "body", "new_title"},
 }
+# Validated, summarised and executed in assistant.agent.homebase, which
+# imports this module, so those hooks import it lazily.
+HOMEBASE_KINDS = {"homebase_create_snag", "homebase_update_snag", "homebase_update_document", "homebase_update_insurance"}
 MAX_NOTE_EDITS = 20
 MAX_EDIT_CHARS = 5000
 NOTE_EDIT_PROPERTIES = {
@@ -153,6 +156,9 @@ def _note_changes(args):
 
 
 def validate_payload(kind, args):
+    if kind in HOMEBASE_KINDS:
+        from .homebase import validate_write
+        return validate_write(kind, args)
     allowed = CREATE_FIELDS.get(kind, EDIT_FIELDS.get(kind, set()))
     if set(args) - allowed:
         raise ToolInputError("Unexpected fields: " + ", ".join(sorted(set(args) - allowed)))
@@ -283,6 +289,9 @@ def validate_payload(kind, args):
 def summary(proposal):
     p = proposal.payload
     lines = [f"Proposal {proposal.id}: {proposal.get_kind_display()}", p.get("title", "")]
+    if proposal.kind in HOMEBASE_KINDS:
+        from .homebase import summary_lines
+        return "\n".join(lines + summary_lines(proposal.kind, p))[:3300]
     for key, label in (
         ("appointment_date", "Date"), ("start_time", "Start"), ("end_time", "End"),
         ("location", "Location"), ("meeting_url", "Meeting link"),
@@ -383,6 +392,9 @@ def propose(ctx, args, *, kind):
 
 def _execute(proposal):
     kind, p = proposal.kind, proposal.payload
+    if kind in HOMEBASE_KINDS:
+        from .homebase import execute_write
+        return execute_write(proposal)
     # Revalidate mutable references and dates at decision time.
     allowed = CREATE_FIELDS.get(kind, EDIT_FIELDS.get(kind))
     validate_payload(kind, {k: v for k, v in p.items() if k in allowed})
