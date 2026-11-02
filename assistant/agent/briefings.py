@@ -25,11 +25,11 @@ DAILY_BRIEF_PROMPT = """Scheduled morning brief for {today:%A %-d %B %Y}.
 3. For a date, appointment or deadline from email that isn't already in the calendar or tasks, propose it (propose_event, propose_task or propose_reminder) so I can confirm it. Never propose duplicates. Propose at most 3.
 4. Apply my saved memories and standing rules.
 
-Write the brief in this shape, leaving out any section that would be empty:
+{home}Write the brief in this shape, leaving out any section that would be empty:
 **Today**: shift and key events with times, plus any clash, early start or travel concern.
 **Needs you**: up to 5 items from email or tasks, one line each: who or what, the action, and by when.
 **Money**: bills or payments due in the next 7 days.
-**Proposed**: one line per card you created.
+{home_section}**Proposed**: one line per card you created.
 Finish with one practical suggestion for the day only if there's an obvious one. Keep it under 200 words. Never paste whole emails. If there's genuinely nothing to report, say so in one line."""
 
 WEEKLY_PLAN_PROMPT = """Scheduled week-ahead plan for {start:%A %-d %B} to {end:%A %-d %B %Y}.
@@ -40,11 +40,11 @@ WEEKLY_PLAN_PROMPT = """Scheduled week-ahead plan for {start:%A %-d %B} to {end:
 4. Propose only clearly useful items with propose_* tools: missing events or deadlines from email, or a reminder to prepare, book, buy or pay something. At most 5, and never duplicates.
 5. Apply my saved memories and standing rules.
 
-Write the plan in this shape, leaving out any section that would be empty:
+{home}Write the plan in this shape, leaving out any section that would be empty:
 **The week**: one line per day, e.g. "Mon 19: Late 15:00–23:00; dentist 16:00 ⚠️ clash".
 **Watch out**: each clash or risk, with a suggested fix.
 **Deadlines & admin**: what's due this week.
-**Free time**: the best windows for rest, family, exercise or study.
+{home_section}**Free time**: the best windows for rest, family, exercise or study.
 **Proposed**: one line per card you created.
 Keep it under 300 words."""
 
@@ -54,11 +54,25 @@ SCHEDULED_NOTE = (
 )
 
 
+HOME_SECTION = "**Home**: each Homebase item, one line: what it is, the date, and what to do (renew, book, chase or update Homebase).\n"
+# The morning brief only raises what is close; the week ahead looks a month out.
+DAILY_HOME_DAYS = 7
+WEEKLY_HOME_DAYS = 30
+
+
+def _home(days: int, include_snags: bool) -> dict:
+    # Imported here: homebase pulls in the proposal and document tools.
+    from .homebase import home_admin_note
+
+    note = home_admin_note(days=days, include_snags=include_snags)
+    return {"home": f"{note}\n\n" if note else "", "home_section": HOME_SECTION if note else ""}
+
+
 def briefing_prompt(briefing_type: str, local_date) -> str:
     if briefing_type == WEEKLY:
         start = local_date + timedelta(days=1)
-        return WEEKLY_PLAN_PROMPT.format(start=start, end=start + timedelta(days=6))
-    return DAILY_BRIEF_PROMPT.format(today=local_date)
+        return WEEKLY_PLAN_PROMPT.format(start=start, end=start + timedelta(days=6), **_home(WEEKLY_HOME_DAYS, True))
+    return DAILY_BRIEF_PROMPT.format(today=local_date, **_home(DAILY_HOME_DAYS, False))
 
 
 def enqueue_briefing(chat: TelegramChat, user: TelegramUser, briefing_type: str, local_date) -> AgentJob:
