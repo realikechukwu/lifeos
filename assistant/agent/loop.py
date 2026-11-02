@@ -52,6 +52,7 @@ READ_ONLY_TOOLS = {
     "get_calendar", "list_tasks", "list_reminders", "search_notes", "read_note",
     "list_profile_documents", "read_profile_document", "list_generated_documents",
     "search_my_inbox", "read_my_email",
+    "homebase_snags", "homebase_documents", "homebase_insurance", "homebase_wifi", "homebase_read_document",
 }
 
 

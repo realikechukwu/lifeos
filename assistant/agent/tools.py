@@ -20,6 +20,7 @@ from django.conf import settings
 from core.models import AgentJob, AgentMemory, AgentThread, IncomingEmail, Note, Reminder, Task, TelegramChat, TelegramUser
 from .proposals import ToolInputError, HANDLERS as PROPOSAL_HANDLERS, tool_definitions, confirm_proposal, CONFIRM_DEFINITION
 from .documents import HANDLERS as DOCUMENT_HANDLERS, TOOL_DEFINITIONS as DOCUMENT_TOOLS
+from .homebase import HANDLERS as HOMEBASE_HANDLERS, TOOL_DEFINITIONS as HOMEBASE_TOOLS
 
 from assistant.services.google_calendar import list_calendar_events
 from assistant.services import personal_inbox
@@ -360,10 +361,19 @@ WEB_TOOLS = [
     {"type": "web_search_20260209", "name": "web_search", "max_uses": 5},
     {"type": "web_fetch_20260209", "name": "web_fetch", "max_uses": 5},
 ]
-TOOL_DEFINITIONS = sorted(_DEFINITIONS + tool_definitions() + [CONFIRM_DEFINITION] + DOCUMENT_TOOLS + WEB_TOOLS, key=lambda tool: tool["name"])
-# Server tools execute remotely: exclude them at startup when disabled. Every
-# call in this worker uses this same list, regardless of speaker or channel.
-ACTIVE_TOOL_DEFINITIONS = TOOL_DEFINITIONS if settings.AGENT_WEB_ENABLED else [t for t in TOOL_DEFINITIONS if t not in WEB_TOOLS]
+TOOL_DEFINITIONS = sorted(
+    _DEFINITIONS + tool_definitions() + [CONFIRM_DEFINITION] + DOCUMENT_TOOLS + HOMEBASE_TOOLS + WEB_TOOLS,
+    key=lambda tool: tool["name"],
+)
+# Optional tool groups are chosen once at startup, so a disabled group leaves
+# the cached prefix untouched. Server tools execute remotely; Homebase tools
+# also refuse at call time when switched off. Every call in this worker uses
+# this same list, regardless of speaker or channel.
+_INACTIVE_TOOLS = (
+    ([] if settings.AGENT_WEB_ENABLED else WEB_TOOLS)
+    + ([] if settings.AGENT_HOMEBASE_ENABLED else HOMEBASE_TOOLS)
+)
+ACTIVE_TOOL_DEFINITIONS = [t for t in TOOL_DEFINITIONS if t not in _INACTIVE_TOOLS]
 
 HANDLERS = {
     "confirm_proposal": lambda ctx, args: _dumps(confirm_proposal(ctx, args)),
@@ -374,6 +384,7 @@ HANDLERS = {
     "remember": remember,
     **{name: (lambda ctx, args, handler=handler: _dumps(handler(ctx, args)))
        for name, handler in {**PROPOSAL_HANDLERS, **DOCUMENT_HANDLERS}.items()},
+    **HOMEBASE_HANDLERS,
     "read_my_email": read_my_email,
     "read_note": read_note,
     "search_my_inbox": search_my_inbox,
