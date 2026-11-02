@@ -36,9 +36,7 @@ HOMEBASE_SETTINGS = {
 }
 DOC_ID = "0b6d3c1e-7f2a-4c55-9e1d-2a3b4c5d6e7f"
 TOOL_NAMES = {"homebase_snags", "homebase_documents", "homebase_insurance", "homebase_wifi", "homebase_read_document"}
-WRITE_TOOL_NAMES = {"propose_homebase_snag", "propose_homebase_snag_update",
-                    "propose_homebase_document_update", "propose_homebase_insurance_update",
-                    "propose_homebase_document", "propose_homebase_memory_aid", "propose_homebase_insurance"}
+WRITE_TOOL_NAMES = {"propose_homebase_snag", "propose_homebase_document", "propose_homebase_memory_aid", "propose_homebase_insurance"}
 SNAG_ID = "5a1e2b3c-4d5e-4f60-8a7b-9c0d1e2f3a4b"
 POLICY_ID = "7c8d9e0f-1a2b-4c3d-8e4f-5a6b7c8d9e0f"
 BASE_UPDATED = "2026-10-01T09:00:00.123456+00:00"
@@ -436,7 +434,7 @@ class HomebaseProposalTests(TestCase):
         self.assertEqual([w[0] for w in self.fake.writes], ["POST", "POST", "DELETE"])
 
     def test_resolving_a_snag_only_saves_if_unchanged_since_proposed(self):
-        proposal = self.propose("propose_homebase_snag_update", {"snag_id": SNAG_ID, "status": "resolved", "severity": "low"})
+        proposal = self.propose("propose_homebase_snag", {"snag_id": SNAG_ID, "status": "resolved", "severity": "low"})
         self.assertEqual(proposal.payload["changes"], {"status": "resolved"})
         self.assertIn("Status: open → resolved", summary(proposal))
         self.assertIn("Dripping tap (Kitchen)", summary(proposal))
@@ -449,7 +447,7 @@ class HomebaseProposalTests(TestCase):
         self.assertEqual(values["resolved_at"], values["updated_at"])
 
     def test_a_record_edited_in_homebase_meanwhile_is_not_overwritten(self):
-        proposal = self.propose("propose_homebase_snag_update", {"snag_id": SNAG_ID, "status": "in_progress"})
+        proposal = self.propose("propose_homebase_snag", {"snag_id": SNAG_ID, "status": "in_progress"})
         self.fake.update_matches = False
         decide(proposal, confirm=True)
         proposal.refresh_from_db()
@@ -457,7 +455,7 @@ class HomebaseProposalTests(TestCase):
         self.assertIn("changed in Homebase", proposal.result["detail"])
 
     def test_insurance_amounts_and_card(self):
-        proposal = self.propose("propose_homebase_insurance_update", {
+        proposal = self.propose("propose_homebase_insurance", {
             "policy_id": POLICY_ID, "buildings_excess": "250", "renewal_date": "2027-12-01",
         })
         self.assertEqual(proposal.payload["changes"], {"buildings_excess": 250.0, "renewal_date": "2027-12-01"})
@@ -468,24 +466,34 @@ class HomebaseProposalTests(TestCase):
 
     def test_invalid_changes_are_refused(self):
         for tool, args, message in [
-            ("propose_homebase_snag_update", {"snag_id": SNAG_ID, "severity": "low"}, "unchanged"),
-            ("propose_homebase_snag_update", {"snag_id": SNAG_ID, "title": None}, "cannot be cleared"),
-            ("propose_homebase_snag_update", {"snag_id": "1", "status": "resolved"}, "id returned"),
-            ("propose_homebase_insurance_update", {"policy_id": POLICY_ID, "renewal_date": "1 Dec"}, "YYYY-MM-DD"),
-            ("propose_homebase_insurance_update", {"policy_id": POLICY_ID, "contents_excess": True}, "amount"),
-            ("propose_homebase_document_update", {"document_id": DOC_ID, "notes": "Replace"}, "structured data"),
+            ("propose_homebase_snag", {"snag_id": SNAG_ID, "severity": "low"}, "unchanged"),
+            ("propose_homebase_snag", {"snag_id": SNAG_ID, "title": None}, "cannot be cleared"),
+            ("propose_homebase_snag", {"snag_id": "1", "status": "resolved"}, "id returned"),
+            ("propose_homebase_insurance", {"policy_id": POLICY_ID, "renewal_date": "1 Dec"}, "YYYY-MM-DD"),
+            ("propose_homebase_insurance", {"policy_id": POLICY_ID, "contents_excess": True}, "amount"),
+            ("propose_homebase_document", {"document_id": DOC_ID, "notes": "Replace"}, "structured data"),
             ("propose_homebase_snag", {"title": "Crack"}, "title and a room"),
         ]:
             with self.subTest(args=args), self.assertRaisesMessage(ToolInputError, message):
                 self.propose(tool, args)
         self.assertEqual(AgentProposal.objects.count(), 0)
 
+    def test_one_tool_per_record_creates_or_changes(self):
+        self.send_photo()
+        with self.assertRaisesMessage(ToolInputError, "only be attached to a new snag"):
+            self.propose("propose_homebase_snag", {"snag_id": SNAG_ID, "status": "resolved", "attach_photo": True})
+        with self.assertRaisesMessage(ToolInputError, "Unexpected fields"):
+            self.propose("propose_homebase_document", {"document_id": DOC_ID, "category": "utility"})
+        created = self.propose("propose_homebase_snag", {"title": "Crack", "room": "Hall"})
+        changed = self.propose("propose_homebase_snag", {"snag_id": SNAG_ID, "status": "resolved"})
+        self.assertEqual((created.kind, changed.kind), ("homebase_create_snag", "homebase_update_snag"))
+
     def test_document_dates_can_be_set_and_cleared(self):
-        proposal = self.propose("propose_homebase_document_update", {"document_id": DOC_ID, "expiry_date": "2027-03-01"})
+        proposal = self.propose("propose_homebase_document", {"document_id": DOC_ID, "expiry_date": "2027-03-01"})
         self.assertIn("Expiry date: (none) → 2027-03-01", summary(proposal))
 
     def test_switching_homebase_off_stops_pending_changes(self):
-        proposal = self.propose("propose_homebase_snag_update", {"snag_id": SNAG_ID, "status": "resolved"})
+        proposal = self.propose("propose_homebase_snag", {"snag_id": SNAG_ID, "status": "resolved"})
         with self.settings(AGENT_HOMEBASE_ENABLED=False):
             decide(proposal, confirm=True)
         proposal.refresh_from_db()

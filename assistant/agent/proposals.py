@@ -548,17 +548,40 @@ CONFIRM_DEFINITION = {
 }
 
 
+REPLACES_PROPERTY = {"type": "integer", "description": "Id of your pending proposal this corrects."}
+EXTRA_DESCRIPTIONS = {"update_task": " Changing the task clears its due_time."}
+
+
+def _compact(name, prop):
+    """A pydantic field schema without the titles, defaults and anyOf-null
+    wrappers that only add tokens; every field is optional to the model anyway."""
+    variants = [v for v in prop.get("anyOf", [prop]) if v.get("type") != "null"]
+    nullable = len(variants) < len(prop.get("anyOf", []))
+    compact = {k: v for k, v in variants[0].items() if k not in {"title", "default"}}
+    if nullable:
+        compact["type"] = [compact["type"], "null"]
+        if "enum" in compact:
+            compact["enum"] = [*compact["enum"], None]
+    if name.endswith("_date") or name == "recurrence_until":
+        compact.setdefault("description", "YYYY-MM-DD.")
+    elif name.endswith("_time"):
+        compact.setdefault("description", "24-hour HH:MM.")
+    return compact
+
+
 def tool_definitions():
     schema = AssistantAction.model_json_schema()["properties"]
     definitions = []
     for kind, fields in {**CREATE_FIELDS, **EDIT_FIELDS}.items():
-        known = NOTE_EDIT_PROPERTIES if kind == "update_note" else schema
-        properties = {key: known[key] if key in known else {"type": "integer"} for key in sorted(fields)}
-        properties["replaces_proposal_id"] = {"type": "integer", "description": "Supersede a pending proposal when correcting it."}
+        if kind == "update_note":
+            properties = {key: NOTE_EDIT_PROPERTIES[key] for key in sorted(fields)}
+        else:
+            properties = {key: _compact(key, schema[key]) if key in schema else {"type": "integer"} for key in sorted(fields)}
+        properties["replaces_proposal_id"] = REPLACES_PROPERTY
         name = {"create_event": "event", "create_task": "task", "create_note": "note", "create_reminder": "reminder"}.get(kind, kind)
         description = NOTE_EDIT_DESCRIPTION if kind == "update_note" else (
-            f"Propose {kind.replace('_', ' ')}. Python validates; Telegram requires Confirm. Use ids from list tools. "
-            "Task edits support title, due_date and assigned_to; they clear due_time."
+            f"Propose {kind.replace('_', ' ')}. Use ids from list tools; Telegram requires Confirm."
+            + EXTRA_DESCRIPTIONS.get(kind, "")
         )
         definitions.append({
             "name": f"propose_{name}",
