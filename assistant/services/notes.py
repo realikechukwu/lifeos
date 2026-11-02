@@ -1,5 +1,5 @@
-"""Note creation. Single source of truth for both the automatic email
-pipeline and the Django admin approval action."""
+"""Note creation and edits. Single source of truth for the automatic email
+pipeline, the Django admin approval action and the agent's note edits."""
 
 from django.utils import timezone
 
@@ -78,5 +78,60 @@ def create_note_for_parsed_action(parsed_action: ParsedAction) -> Note:
         object_id=str(note.id),
         success=True,
         details={"title": note.title},
+    )
+    return note
+
+
+MAX_NOTE_CHARS = 50000
+
+
+class NoteEditError(ValueError):
+    """An edit that cannot be applied exactly as written."""
+
+
+def normalised_body(note: Note) -> str:
+    """Browsers submit textareas with CRLF; edits match against plain newlines."""
+    return note.body.replace("\r\n", "\n")
+
+
+def apply_note_edits(body: str, *, edits=(), append: str | None = None, new_body: str | None = None) -> str:
+    """Apply find/replace pairs in order, then append. Each find must match
+    exactly once at the point it is applied, so text nobody quoted never changes."""
+    if new_body is not None:
+        result = new_body
+    else:
+        result = body
+        for number, (find, replace) in enumerate(edits, 1):
+            count = result.count(find)
+            if count == 0:
+                raise NoteEditError(f"Edit {number}: that text is not in the note. Read the note again and quote it exactly.")
+            if count > 1:
+                raise NoteEditError(
+                    f"Edit {number}: that text appears {count} times in the note. Quote more of the line so it matches once."
+                )
+            start = result.index(find)
+            end = start + len(find)
+            if not replace and result[start - 1:start] in {"", "\n"} and result[end:end + 1] in {"", "\n"}:
+                # Removing a whole line takes its line break with it.
+                if end < len(result):
+                    end += 1
+                elif start > 0:
+                    start -= 1
+            result = result[:start] + replace + result[end:]
+        if append:
+            result = f"{result.rstrip()}\n{append}" if result.strip() else append
+    if len(result) > MAX_NOTE_CHARS:
+        raise NoteEditError(f"The note would be longer than {MAX_NOTE_CHARS} characters.")
+    return result
+
+
+def update_note(note: Note, *, title: str, body: str, role: str) -> Note:
+    """Save an agent edit, keeping the previous version in the audit log so it can be restored."""
+    previous = {"previous_title": note.title, "previous_body": note.body}
+    note.title, note.body = title, body
+    note.save(update_fields=["title", "body", "updated_at"])
+    AuditLog.objects.create(
+        action="update_note", object_type="Note", object_id=str(note.id),
+        details={"role": role, **previous},
     )
     return note

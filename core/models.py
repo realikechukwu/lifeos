@@ -838,6 +838,7 @@ class AgentProposal(models.Model):
         RESCHEDULE_EVENT = "reschedule_event", "Reschedule event"
         CANCEL_EVENT = "cancel_event", "Cancel event"
         CANCEL_REMINDER = "cancel_reminder", "Cancel reminder"
+        UPDATE_NOTE = "update_note", "Update note"
 
     class Status(models.TextChoices):
         PENDING = "pending", "Pending"

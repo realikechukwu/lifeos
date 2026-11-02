@@ -5,6 +5,7 @@ Uncertain executions are never retried automatically.
 """
 from datetime import datetime, timedelta, timezone as dt_timezone
 from functools import partial
+import hashlib
 import re
 
 from django.conf import settings
@@ -14,12 +15,12 @@ from pydantic import ValidationError
 
 from core.models import (
     AgentOutcome, AgentProposal, AuditLog, CalendarEventRecord, IncomingEmail,
-    ParsedAction, Reminder, Task,
+    Note, ParsedAction, Reminder, Task,
 )
 from assistant.services.extractor import (
     AssistantAction, build_recurrence, combine_date_and_time, parse_24h_time, parse_iso_date,
 )
-from assistant.services import google_calendar, router, tasks, telegram_inbox
+from assistant.services import google_calendar, notes, router, tasks, telegram_inbox
 from assistant.services.reminders import evaluate_reminder_fields
 from assistant.services.telegram import TelegramAPIError
 from .formatting import to_telegram_html
@@ -53,7 +54,30 @@ EDIT_FIELDS = {
     "update_task": {"task_id", "title", "due_date", "assigned_to"},
     "reschedule_event": {"event_id", "appointment_date", "start_time", "all_day"},
     "cancel_event": {"event_id"}, "cancel_reminder": {"reminder_id"},
+    "update_note": {"note_id", "edits", "append", "body", "new_title"},
 }
+MAX_NOTE_EDITS = 20
+MAX_EDIT_CHARS = 5000
+NOTE_EDIT_PROPERTIES = {
+    "note_id": {"type": "integer"},
+    "edits": {
+        "type": "array",
+        "description": "Exact replacements, applied in order. find must quote the note's current text and match only one place; an empty replace removes it.",
+        "items": {
+            "type": "object",
+            "properties": {"find": {"type": "string"}, "replace": {"type": "string"}},
+            "required": ["find", "replace"],
+            "additionalProperties": False,
+        },
+    },
+    "append": {"type": "string", "description": "Text added as new lines at the end of the note."},
+    "body": {"type": "string", "description": "Replaces the whole note. Only when the speaker asks for a rewrite; not with edits or append."},
+    "new_title": {"type": "string"},
+}
+NOTE_EDIT_DESCRIPTION = (
+    "Propose changing a note. Read it in full with read_note first. Prefer edits and append; "
+    "Python checks every find matches exactly once and Telegram requires Confirm."
+)
 
 
 def _id(value, label):
@@ -100,6 +124,32 @@ def _title(value):
     if not isinstance(value, str) or not value.strip() or len(value) > 255:
         raise ToolInputError("title must contain 1–255 characters.")
     return value.strip()
+
+
+def _text(value, label, limit, *, allow_empty=False):
+    if not isinstance(value, str) or len(value) > limit or (not allow_empty and not value.strip()):
+        raise ToolInputError(f"{label} must be text of at most {limit} characters" + ("." if allow_empty else ", not empty."))
+    return value.replace("\r\n", "\n")
+
+
+def _note_body_hash(body):
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()[:16]
+
+
+def _note_changes(args):
+    """The validated edits, append and rewrite from a propose_update_note call."""
+    edits = args.get("edits", [])
+    if not isinstance(edits, list) or len(edits) > MAX_NOTE_EDITS or any(
+        not isinstance(edit, dict) or set(edit) != {"find", "replace"} for edit in edits
+    ):
+        raise ToolInputError(f"edits must be a list of up to {MAX_NOTE_EDITS} objects with find and replace.")
+    pairs = [(_text(e["find"], "find", MAX_EDIT_CHARS), _text(e["replace"], "replace", MAX_EDIT_CHARS, allow_empty=True))
+             for e in edits]
+    append = _text(args["append"], "append", MAX_EDIT_CHARS).strip("\n") if "append" in args else None
+    body = _text(args["body"], "body", notes.MAX_NOTE_CHARS) if "body" in args else None
+    if body is not None and (pairs or append):
+        raise ToolInputError("Use body on its own: it replaces the whole note.")
+    return pairs, append, body
 
 
 def validate_payload(kind, args):
@@ -205,6 +255,26 @@ def validate_payload(kind, args):
         if reminder.status not in {Reminder.Status.PENDING, Reminder.Status.FAILED}:
             raise ToolInputError("Only unsent reminders can be cancelled.")
         data["title"] = reminder.title
+    elif kind == "update_note":
+        note = _record(Note, args.get("note_id"), "note_id")
+        pairs, append, body = _note_changes(args)
+        new_title = _title(args["new_title"]) if "new_title" in args else None
+        current = notes.normalised_body(note)
+        try:
+            updated = notes.apply_note_edits(current, edits=pairs, append=append, new_body=body)
+        except notes.NoteEditError as exc:
+            raise ToolInputError(str(exc)) from None
+        if updated == current and new_title in {None, note.title}:
+            raise ToolInputError("That leaves the note unchanged. Supply edits, append, body or new_title.")
+        data.update(
+            title=note.title or notes.generate_title_from_body(current) or "Note",
+            edits=[{"find": find, "replace": replace} for find, replace in pairs],
+            base_hash=_note_body_hash(current), previous_length=len(current),
+        )
+        if append is not None:
+            data["append"] = append
+        if body is not None:
+            data["body"] = body
     else:
         raise ToolInputError("Unsupported proposal kind.")
     return data
@@ -226,11 +296,30 @@ def summary(proposal):
         if p.get(key) is not None and p.get(key) != "":
             value = str(p[key])
             lines.append(f"{label}: {value[:1500]}" + ("… (preview)" if len(value) > 1500 else ""))
+    if proposal.kind == "update_note":
+        lines += _note_change_lines(p)
     if p.get("all_day"):
         lines.append("All day")
     if p.get("notify_both"):
         lines.append("Confirmation CC: the other household member")
     return "\n".join(lines)[:3300]
+
+
+def _clip(value, limit=400):
+    return value[:limit] + ("…" if len(value) > limit else "")
+
+
+def _note_change_lines(p):
+    lines = [f"Rename to: {p['new_title']}"] if p.get("new_title") else []
+    for edit in p.get("edits") or []:
+        lines.append(f"Was: {_clip(edit['find'])}")
+        lines.append(f"Now: {_clip(edit['replace'])}" if edit["replace"].strip() else "Now: (removed)")
+    if p.get("append"):
+        lines.append(f"Add: {_clip(p['append'], 1000)}")
+    if p.get("body") is not None:
+        lines.append(f"Whole note replaced ({p['previous_length']} → {len(p['body'])} characters). New text:")
+        lines.append(_clip(p["body"], 1500))
+    return lines
 
 
 def record_outcome(proposal, detail):
@@ -335,6 +424,17 @@ def _execute(proposal):
         google_calendar.cancel_calendar_event(CalendarEventRecord.objects.get(pk=p["event_id"]))
     elif kind == "cancel_reminder":
         telegram_inbox.cancel_reminder(Reminder.objects.get(pk=p["reminder_id"]))
+    elif kind == "update_note":
+        with transaction.atomic():
+            note = Note.objects.select_for_update().get(pk=p["note_id"])
+            current = notes.normalised_body(note)
+            if p.get("body") is not None and _note_body_hash(current) != p["base_hash"]:
+                return {"outcome": "failed", "detail": "Failed: the note changed after this rewrite was proposed, so nothing was saved."}
+            body = notes.apply_note_edits(
+                current, edits=[(e["find"], e["replace"]) for e in p["edits"]],
+                append=p.get("append"), new_body=p.get("body"),
+            )
+            notes.update_note(note, title=p.get("new_title") or note.title, body=body, role=proposal.role)
     return {"outcome": "done", "detail": f"Done: {proposal.get_kind_display().lower()}."}
 
 
@@ -437,12 +537,17 @@ def tool_definitions():
     schema = AssistantAction.model_json_schema()["properties"]
     definitions = []
     for kind, fields in {**CREATE_FIELDS, **EDIT_FIELDS}.items():
-        properties = {key: schema[key] if key in schema else {"type": "integer"} for key in sorted(fields)}
+        known = NOTE_EDIT_PROPERTIES if kind == "update_note" else schema
+        properties = {key: known[key] if key in known else {"type": "integer"} for key in sorted(fields)}
         properties["replaces_proposal_id"] = {"type": "integer", "description": "Supersede a pending proposal when correcting it."}
         name = {"create_event": "event", "create_task": "task", "create_note": "note", "create_reminder": "reminder"}.get(kind, kind)
+        description = NOTE_EDIT_DESCRIPTION if kind == "update_note" else (
+            f"Propose {kind.replace('_', ' ')}. Python validates; Telegram requires Confirm. Use ids from list tools. "
+            "Task edits support title, due_date and assigned_to; they clear due_time."
+        )
         definitions.append({
             "name": f"propose_{name}",
-            "description": f"Propose {kind.replace('_', ' ')}. Python validates; Telegram requires Confirm. Use ids from list tools. Task edits support title, due_date and assigned_to; they clear due_time.",
+            "description": description,
             "input_schema": {"type": "object", "properties": properties, "additionalProperties": False},
         })
     return definitions

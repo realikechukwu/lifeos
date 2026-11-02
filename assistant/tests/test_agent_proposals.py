@@ -5,13 +5,13 @@ from unittest.mock import Mock, patch
 from django.test import TestCase, override_settings
 from django.utils import timezone
 
-from assistant.agent.proposals import ToolInputError, decide, handle_callback, propose, validate_payload
-from assistant.agent.tools import ToolContext
+from assistant.agent.proposals import ToolInputError, decide, handle_callback, propose, summary, tool_definitions, validate_payload
+from assistant.agent.tools import HANDLERS, ToolContext
 from assistant.agent.worker import claim_next_jobs, run_jobs
 from assistant.services.telegram_handlers import process_telegram_update
 from assistant.tests.test_agent import AGENT_SETTINGS, AgentFakeBot, FakeClient, reply, text, tool_use
 from assistant.tests.test_telegram import message_update
-from core.models import AgentJob, AgentMessage, AgentProposal, AgentThread, IncomingEmail, Reminder, Task
+from core.models import AgentJob, AgentMessage, AgentProposal, AgentThread, AuditLog, IncomingEmail, Note, Reminder, Task
 
 
 @override_settings(**AGENT_SETTINGS, AGENT_PROPOSALS_ENABLED=True, GOOGLE_CALENDAR_ID="family")
@@ -172,3 +172,134 @@ class ProposalTests(TestCase):
     def test_flag_blocks_proposals(self):
         with self.assertRaises(ToolInputError):
             self.make()
+
+
+INVENTORY = "Garage\r\nKitchen roll: 6 packs\r\nBin bags: 3 rolls\r\nBin bag ties: 1 pack"
+
+
+@override_settings(**AGENT_SETTINGS, AGENT_PROPOSALS_ENABLED=True)
+class NoteEditTests(TestCase):
+    def setUp(self):
+        self.bot = AgentFakeBot()
+        self.bot.edit_message = Mock()
+        process_telegram_update(message_update(1, text="Took 2 kitchen roll"), bot=self.bot)
+        job = AgentJob.objects.get()
+        self.thread = AgentThread.objects.create(
+            channel="telegram", role="ike", telegram_user=job.telegram_user,
+            telegram_chat=job.telegram_chat, last_activity_at=timezone.now(),
+        )
+        self.ctx = ToolContext(role="ike", speaker_name="Ike", thread=self.thread,
+                               telegram_user=job.telegram_user, telegram_chat=job.telegram_chat, bot=self.bot)
+        self.note = Note.objects.create(title="Garage inventory", body=INVENTORY)
+
+    def make(self, **args):
+        data = propose(self.ctx, {"note_id": self.note.id, **args}, kind="update_note")
+        return AgentProposal.objects.get(pk=data["proposal_id"])
+
+    def edit(self, find, replace):
+        return {"find": find, "replace": replace}
+
+    def test_confirmed_edits_change_only_the_quoted_lines_and_keep_the_old_version(self):
+        p = self.make(edits=[self.edit("Kitchen roll: 6 packs", "Kitchen roll: 4 packs"),
+                             self.edit("Bin bag ties: 1 pack", "")], append="WD-40: 1 can")
+        self.assertEqual(self.note.body, Note.objects.get().body, "nothing changes before Confirm")
+        decide(p, confirm=True)
+        self.note.refresh_from_db()
+        self.assertEqual(self.note.body, "Garage\nKitchen roll: 4 packs\nBin bags: 3 rolls\nWD-40: 1 can")
+        log = AuditLog.objects.get(action="update_note")
+        self.assertEqual((log.details["previous_body"], log.details["role"]), (INVENTORY, "ike"))
+
+    def test_card_shows_before_and_after(self):
+        p = self.make(edits=[self.edit("Kitchen roll: 6 packs", "Kitchen roll: 4 packs"),
+                             self.edit("Bin bags: 3 rolls", "")], append="WD-40: 1 can")
+        card = summary(p)
+        self.assertIn("Update note\nGarage inventory", card)
+        self.assertIn("Was: Kitchen roll: 6 packs\nNow: Kitchen roll: 4 packs", card)
+        self.assertIn("Was: Bin bags: 3 rolls\nNow: (removed)", card)
+        self.assertIn("Add: WD-40: 1 can", card)
+
+    def test_missing_duplicate_or_empty_edits_are_rejected(self):
+        for args in [
+            {"edits": [self.edit("Kitchen roll: 5 packs", "Kitchen roll: 3 packs")]},
+            {"edits": [self.edit("Bin bag", "Sack")]},
+            {"edits": [self.edit("", "x")]},
+            {"edits": [{"find": "Garage"}]},
+            {"edits": [self.edit("Garage", "Garage")]},
+            {},
+            {"body": "New", "append": "More"},
+            {"title": "Renamed"},
+        ]:
+            with self.subTest(args=args), self.assertRaises(ToolInputError):
+                self.make(**args)
+        with self.assertRaises(ToolInputError):
+            propose(self.ctx, {"note_id": 999, "append": "x"}, kind="update_note")
+        self.assertFalse(AgentProposal.objects.exists())
+
+    def test_edit_that_no_longer_matches_at_confirm_fails_without_saving(self):
+        p = self.make(edits=[self.edit("Kitchen roll: 6 packs", "Kitchen roll: 4 packs")])
+        self.note.body = INVENTORY.replace("6 packs", "5 packs")
+        self.note.save()
+        decide(p, confirm=True)
+        p.refresh_from_db()
+        self.assertEqual(p.status, "failed")
+        self.assertIn("not in the note", p.result["detail"])
+        self.assertIn("5 packs", Note.objects.get().body)
+
+    def test_edit_still_applies_after_an_unrelated_change(self):
+        p = self.make(edits=[self.edit("Kitchen roll: 6 packs", "Kitchen roll: 4 packs")])
+        self.note.body = INVENTORY + "\r\nPaint: 2 tins"
+        self.note.save()
+        decide(p, confirm=True)
+        self.assertIn("Kitchen roll: 4 packs\nBin bags: 3 rolls\nBin bag ties: 1 pack\nPaint: 2 tins", Note.objects.get().body)
+
+    def test_rewrite_refused_if_the_note_changed_since_it_was_proposed(self):
+        p = self.make(body="Garage\nEmpty", new_title="Garage")
+        self.assertIn("Whole note replaced", summary(p))
+        self.note.body += "\nPaint: 2 tins"
+        self.note.save()
+        decide(p, confirm=True)
+        p.refresh_from_db()
+        self.assertEqual(p.status, "failed")
+        self.assertIn("Paint", Note.objects.get().body)
+        fresh = self.make(body="Garage\nEmpty", new_title="Garage")
+        decide(fresh, confirm=True)
+        self.assertEqual((Note.objects.get().title, Note.objects.get().body), ("Garage", "Garage\nEmpty"))
+
+    def test_removing_a_whole_line_leaves_no_blank_line(self):
+        decide(self.make(edits=[self.edit("Garage", ""), self.edit("Bin bags: 3 rolls", "")]), confirm=True)
+        self.assertEqual(Note.objects.get().body, "Kitchen roll: 6 packs\nBin bag ties: 1 pack")
+        decide(self.make(edits=[self.edit("ties: 1 pack", "")]), confirm=True)
+        self.assertEqual(Note.objects.get().body, "Kitchen roll: 6 packs\nBin bag ")
+
+    def test_append_to_an_empty_list(self):
+        self.note.body = ""
+        self.note.save()
+        decide(self.make(append="Milk\nBread\n"), confirm=True)
+        self.assertEqual(Note.objects.get().body, "Milk\nBread")
+
+    def test_read_note_returns_the_full_body_with_plain_newlines(self):
+        self.note.body = "Long\r\n" + "x" * 3000
+        self.note.save()
+        found = json.loads(HANDLERS["search_notes"](self.ctx, {"query": "Long"}))["notes"][0]
+        self.assertTrue(found["truncated"])
+        full = json.loads(HANDLERS["read_note"](self.ctx, {"note_id": self.note.id}))
+        self.assertEqual(full["body"], "Long\n" + "x" * 3000)
+        with self.assertRaises(ToolInputError):
+            HANDLERS["read_note"](self.ctx, {"note_id": "1"})
+
+    def test_email_note_edits_wait_for_yes(self):
+        incoming = IncomingEmail.objects.create(
+            gmail_message_id="m1", outer_sender="ike@example.com", subject="Garage",
+            body_text="Took 2 kitchen roll", received_at=timezone.now(),
+        )
+        self.ctx.channel, self.ctx.incoming_email, self.ctx.newest_instruction = "email", incoming, "Took 2 kitchen roll"
+        with override_settings(AGENT_EMAIL_ENABLED=True):
+            p = self.make(edits=[self.edit("Kitchen roll: 6 packs", "Kitchen roll: 4 packs")])
+        self.assertEqual(p.status, "pending")
+        self.assertIn("6 packs", Note.objects.get().body)
+
+    def test_tool_schema_lists_note_edit_fields(self):
+        definition = next(d for d in tool_definitions() if d["name"] == "propose_update_note")
+        properties = definition["input_schema"]["properties"]
+        self.assertEqual(set(properties), {"note_id", "edits", "append", "body", "new_title", "replaces_proposal_id"})
+        self.assertEqual(properties["edits"]["items"]["required"], ["find", "replace"])

@@ -49,7 +49,7 @@ INTERRUPTED_RESULT = (
     "automatically. Check recorded outcomes or ask the speaker first. Read-only lookups can be retried."
 )
 READ_ONLY_TOOLS = {
-    "get_calendar", "list_tasks", "list_reminders", "search_notes",
+    "get_calendar", "list_tasks", "list_reminders", "search_notes", "read_note",
     "list_profile_documents", "read_profile_document", "list_generated_documents",
     "search_my_inbox", "read_my_email",
 }

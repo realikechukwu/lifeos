@@ -57,6 +57,7 @@ from .telegram_inbox import (
 )
 from .google_calendar import cancel_calendar_event, reschedule_calendar_event
 from assistant.agent.telegram import close_thread, enqueue_telegram_message
+from assistant.agent.photos import handle_telegram_photo, is_image_document
 
 logger = logging.getLogger(__name__)
 
@@ -566,7 +567,7 @@ _BOT_IDENTITY: tuple[int | None, str] | None = None
 def _addressed_text(message: dict, chat: TelegramChat, bot: TelegramBot) -> tuple[bool, str]:
     """In groups the agent only answers messages that @mention the bot or reply
     to it. Returns whether this message is addressed, and its text without the mention."""
-    text = str(message.get("text", "")).strip()
+    text = str(message.get("text") or message.get("caption") or "").strip()
     if chat.chat_type == TelegramChat.ChatType.PRIVATE:
         return True, text
     bot_id, username = _bot_identity(bot)
@@ -2153,6 +2154,11 @@ def process_telegram_update(payload: dict, *, bot: TelegramBot | None = None) ->
                         chat=chat, user=user, text=text, update_id=update_id, bot=bot,
                         addressed=addressed, message_id=message.get("message_id"),
                     )
+            elif ((message.get("photo") or is_image_document(message)) and chat.authorised
+                  and settings.AGENT_ENABLED and settings.AGENT_PHOTOS_ENABLED):
+                addressed, caption = _addressed_text(message, chat, bot)
+                if addressed:
+                    handle_telegram_photo(message, chat, user, update_id, bot, caption=caption)
             elif (message.get("document") and chat.authorised
                   and chat.chat_type == TelegramChat.ChatType.PRIVATE
                   and settings.AGENT_ENABLED and settings.AGENT_DOCUMENTS_ENABLED):
