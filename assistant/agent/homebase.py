@@ -550,39 +550,39 @@ def execute_write(proposal):
     return {"outcome": "done", "detail": "Done: Homebase updated."}
 
 
-def _proposer(kind):
+def _proposer(create_kind, update_kind=None):
+    """One tool per record type: with the record's id it changes it, without it creates one."""
     def handler(ctx, args):
         # File references only ever come from the conversation, never the model.
         args = {k: v for k, v in args.items() if k not in {"photo", "file"}}
-        if kind == "homebase_create_snag":
-            attach = args.pop("attach_photo", False)
-            if type(attach) is not bool:
-                raise ToolInputError("attach_photo must be true or false.")
+        attach = args.pop("attach_photo", False)
+        if type(attach) is not bool:
+            raise ToolInputError("attach_photo must be true or false.")
+        if update_kind and UPDATES[update_kind][1] in args:
             if attach:
-                _enabled()
-                args["photo"] = _latest_file(ctx.thread, IMAGE_MIMES, what="photo")
-        elif kind in {"homebase_create_document", "homebase_create_memory_aid"}:
+                raise ToolInputError("A photo can only be attached to a new snag.")
+            return _dumps(propose(ctx, args, kind=update_kind))
+        if create_kind == "homebase_create_snag" and attach:
             _enabled()
-            aid = kind == "homebase_create_memory_aid"
+            args["photo"] = _latest_file(ctx.thread, IMAGE_MIMES, what="photo")
+        elif create_kind in {"homebase_create_document", "homebase_create_memory_aid"}:
+            _enabled()
+            aid = create_kind == "homebase_create_memory_aid"
             args["file"] = _latest_file(
                 ctx.thread, MEMORY_AID_MIMES if aid else DOCUMENT_MIMES,
                 what="photo" if aid else "photo or PDF", title=str(args.get("title") or ""),
             )
-        return _dumps(propose(ctx, args, kind=kind))
+        return _dumps(propose(ctx, args, kind=create_kind))
     return handler
 
 
 HANDLERS = {f.__name__: f for f in [homebase_snags, homebase_documents, homebase_insurance, homebase_wifi, homebase_read_document]}
-WRITE_TOOLS = {
-    "propose_homebase_snag": "homebase_create_snag",
-    "propose_homebase_document": "homebase_create_document",
-    "propose_homebase_memory_aid": "homebase_create_memory_aid",
-    "propose_homebase_insurance": "homebase_create_insurance",
-    "propose_homebase_snag_update": "homebase_update_snag",
-    "propose_homebase_document_update": "homebase_update_document",
-    "propose_homebase_insurance_update": "homebase_update_insurance",
-}
-HANDLERS.update({name: _proposer(kind) for name, kind in WRITE_TOOLS.items()})
+HANDLERS.update({
+    "propose_homebase_snag": _proposer("homebase_create_snag", "homebase_update_snag"),
+    "propose_homebase_document": _proposer("homebase_create_document", "homebase_update_document"),
+    "propose_homebase_memory_aid": _proposer("homebase_create_memory_aid"),
+    "propose_homebase_insurance": _proposer("homebase_create_insurance", "homebase_update_insurance"),
+})
 
 TOOL_DEFINITIONS = [
     {
@@ -648,75 +648,67 @@ TOOL_DEFINITIONS = [
     },
 ]
 
-_REPLACES = {"type": "integer", "description": "Supersede a pending proposal when correcting it."}
-_CLEARABLE_DATE = {"type": ["string", "null"], "description": "YYYY-MM-DD; null clears it."}
-
-
-def _clearable(description):
-    return {"type": ["string", "null"], "description": f"{description}; null clears it."}
-
-
-_UPDATE_NOTE = (
-    " Get the id from {tool} and pass only the fields that change; Python checks them, shows "
-    "old → new on the card and Telegram requires Confirm. Saving fails safely if the record "
-    "was edited in Homebase after you proposed."
+_REPLACES = {"type": "integer", "description": "Id of your pending proposal this corrects."}
+_DATE = {"type": ["string", "null"], "description": "YYYY-MM-DD; null clears."}
+_TEXT = {"type": ["string", "null"], "description": "Replaces it whole; null clears."}
+_CHANGE = (
+    " With {id} (from {tool}) it changes that record: pass only what changes, and the card shows "
+    "old → new. Without it, it creates one. Telegram requires Confirm."
 )
 TOOL_DEFINITIONS += [
     {
         "name": "propose_homebase_snag",
         "description": (
-            "Propose logging a new snag (something to fix around the house) in Homebase. Set "
-            "attach_photo when the speaker sent a photo of it in this conversation; the newest one "
-            "is attached. Python validates; Telegram requires Confirm."
-        ),
+            "Log a snag (something to fix at home) in Homebase, or change one, e.g. mark it resolved. "
+            "attach_photo adds the newest photo from this conversation to a new snag."
+        ) + _CHANGE.format(id="snag_id", tool="homebase_snags"),
         "input_schema": {
             "type": "object",
             "properties": {
-                "title": {"type": "string", "description": "Short, e.g. \"Dripping kitchen tap\"."},
-                "room": {"type": "string", "description": "Room or area, e.g. \"Kitchen\", \"Garden\"."},
-                "severity": {"type": "string", "enum": list(SNAG_FIELDS["severity"][1]), "description": "Default medium."},
-                "description": {"type": "string"},
+                "snag_id": {"type": "string"},
+                "title": {"type": "string"},
+                "room": {"type": "string"},
+                "severity": {"type": "string", "enum": list(SNAG_FIELDS["severity"][1])},
+                "status": {"type": "string", "enum": list(SNAG_FIELDS["status"][1])},
+                "description": _TEXT,
                 "attach_photo": {"type": "boolean"},
                 "replaces_proposal_id": _REPLACES,
             },
-            "required": ["title", "room"],
             "additionalProperties": False,
         },
     },
     {
         "name": "propose_homebase_document",
         "description": (
-            "Propose filing a new document in Homebase (certificate, warranty, bill, policy schedule) "
-            "from the newest photo or PDF the speaker sent in this conversation. Include the expiry "
-            "date when the document shows one. Python validates; Telegram requires Confirm."
-        ),
+            "File the newest photo or PDF from this conversation as a Homebase document, or change "
+            "a document's title, dates or notes. Include an expiry date the document shows."
+        ) + _CHANGE.format(id="document_id", tool="homebase_documents"),
         "input_schema": {
             "type": "object",
             "properties": {
-                "title": {"type": "string", "description": "e.g. \"Gas safety certificate 2026\"."},
-                "category": {"type": "string", "enum": list(NEW_DOCUMENT_FIELDS["category"][1])},
-                "subcategory": {"type": "string", "description": "Optional type, e.g. \"Boiler\", \"Electricity\"."},
-                "notes": {"type": "string"},
-                "expiry_date": {"type": "string", "description": "YYYY-MM-DD."},
-                "reminder_date": {"type": "string", "description": "YYYY-MM-DD."},
+                "document_id": {"type": "string"},
+                "title": {"type": "string"},
+                "category": {"type": "string", "enum": list(NEW_DOCUMENT_FIELDS["category"][1]), "description": "New documents only."},
+                "subcategory": {"type": "string", "description": "New documents only, e.g. Boiler."},
+                "notes": _TEXT,
+                "expiry_date": _DATE,
+                "reminder_date": _DATE,
                 "replaces_proposal_id": _REPLACES,
             },
-            "required": ["title", "category"],
             "additionalProperties": False,
         },
     },
     {
         "name": "propose_homebase_memory_aid",
         "description": (
-            "Propose saving a memory aid in Homebase: the newest photo the speaker sent in this "
-            "conversation of where something is kept (stopcock, fuse box, spare keys), with a short "
-            "description of the spot. Python validates; Telegram requires Confirm."
+            "Save the newest photo from this conversation as a Homebase memory aid: what it is "
+            "(stopcock, fuse box, spare keys) and where it is kept. Telegram requires Confirm."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "title": {"type": "string", "description": "What it is, e.g. \"Water stopcock\"."},
-                "location_description": {"type": "string", "description": "Where it is, e.g. \"Under the kitchen sink, behind the bin\"."},
+                "title": {"type": "string"},
+                "location_description": {"type": "string", "description": "e.g. Under the kitchen sink, behind the bin."},
                 "notes": {"type": "string"},
                 "replaces_proposal_id": _REPLACES,
             },
@@ -727,88 +719,24 @@ TOOL_DEFINITIONS += [
     {
         "name": "propose_homebase_insurance",
         "description": (
-            "Propose adding a new insurance policy to Homebase. Check homebase_insurance first and "
-            "use propose_homebase_insurance_update for a renewal of an existing policy. Amounts are "
-            "in pounds. Python validates; Telegram requires Confirm."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "insurer_name": {"type": "string"},
-                "policy_type": {"type": "string", "description": "e.g. home, car, life, appliance."},
-                "policy_number": {"type": "string"},
-                "claims_phone": {"type": "string"},
-                "renewal_date": {"type": "string", "description": "YYYY-MM-DD."},
-                "buildings_excess": {"type": "number"},
-                "contents_excess": {"type": "number"},
-                "key_exclusions": {"type": "string"},
-                "notes": {"type": "string"},
-                "replaces_proposal_id": _REPLACES,
-            },
-            "required": ["insurer_name", "policy_number", "claims_phone", "renewal_date"],
-            "additionalProperties": False,
-        },
-    },
-    {
-        "name": "propose_homebase_snag_update",
-        "description": "Propose changing a Homebase snag: mark it in progress or resolved, or edit it." + _UPDATE_NOTE.format(tool="homebase_snags"),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "snag_id": {"type": "string"},
-                "status": {"type": "string", "enum": list(SNAG_FIELDS["status"][1])},
-                "severity": {"type": "string", "enum": list(SNAG_FIELDS["severity"][1])},
-                "title": {"type": "string"},
-                "room": {"type": "string"},
-                "description": _clearable("Replaces the details"),
-                "replaces_proposal_id": _REPLACES,
-            },
-            "required": ["snag_id"],
-            "additionalProperties": False,
-        },
-    },
-    {
-        "name": "propose_homebase_document_update",
-        "description": (
-            "Propose changing a Homebase document's title, expiry date, reminder date or notes. "
-            "Notes are replaced whole, so keep any existing text that should stay."
-        ) + _UPDATE_NOTE.format(tool="homebase_documents"),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "document_id": {"type": "string"},
-                "title": {"type": "string"},
-                "expiry_date": _CLEARABLE_DATE,
-                "reminder_date": _CLEARABLE_DATE,
-                "notes": _clearable("Replaces the notes"),
-                "replaces_proposal_id": _REPLACES,
-            },
-            "required": ["document_id"],
-            "additionalProperties": False,
-        },
-    },
-    {
-        "name": "propose_homebase_insurance_update",
-        "description": (
-            "Propose changing a Homebase insurance policy, e.g. after a renewal: new renewal date, "
-            "policy number, excesses. Amounts are in pounds."
-        ) + _UPDATE_NOTE.format(tool="homebase_insurance"),
+            "Add an insurance policy to Homebase, or change one after a renewal. A new policy needs "
+            "insurer, number, claims phone and renewal date. Amounts in pounds."
+        ) + _CHANGE.format(id="policy_id", tool="homebase_insurance"),
         "input_schema": {
             "type": "object",
             "properties": {
                 "policy_id": {"type": "string"},
                 "insurer_name": {"type": "string"},
-                "policy_type": _clearable("e.g. home, car, life"),
+                "policy_type": {"type": ["string", "null"], "description": "e.g. home, car, life."},
                 "policy_number": {"type": "string"},
                 "claims_phone": {"type": "string"},
                 "renewal_date": {"type": "string", "description": "YYYY-MM-DD."},
                 "buildings_excess": {"type": ["number", "null"]},
                 "contents_excess": {"type": ["number", "null"]},
-                "key_exclusions": _clearable("Replaces the exclusions"),
-                "notes": _clearable("Replaces the notes"),
+                "key_exclusions": _TEXT,
+                "notes": _TEXT,
                 "replaces_proposal_id": _REPLACES,
             },
-            "required": ["policy_id"],
             "additionalProperties": False,
         },
     },
