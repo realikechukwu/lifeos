@@ -237,6 +237,14 @@ AGENT_BRIEFINGS_ENABLED = _bool_env("AGENT_BRIEFINGS_ENABLED", False)
 WEEKLY_EMAIL_ENABLED = _bool_env("WEEKLY_EMAIL_ENABLED", False)
 PERSONAL_GMAIL_IKE = os.environ.get("PERSONAL_GMAIL_IKE", "")
 PERSONAL_GMAIL_WIFE = os.environ.get("PERSONAL_GMAIL_WIFE", "")
+# Read-only Homebase (snags, documents, insurance, wifi) through LifeOS's own
+# Homebase account; Homebase's row-level security limits what it sees.
+# Chosen once at worker startup; restart to change.
+AGENT_HOMEBASE_ENABLED = _bool_env("AGENT_HOMEBASE_ENABLED", False)
+HOMEBASE_SUPABASE_URL = os.environ.get("HOMEBASE_SUPABASE_URL", "")
+HOMEBASE_SUPABASE_ANON_KEY = os.environ.get("HOMEBASE_SUPABASE_ANON_KEY", "")
+HOMEBASE_AGENT_EMAIL = os.environ.get("HOMEBASE_AGENT_EMAIL", "")
+HOMEBASE_AGENT_PASSWORD = os.environ.get("HOMEBASE_AGENT_PASSWORD", "")
 AGENT_MODEL = os.environ.get("AGENT_MODEL", "claude-sonnet-5-5")
 AGENT_EFFORT = os.environ.get("AGENT_EFFORT", "medium")
 AGENT_MAX_TOOL_ROUNDS = _int_env("AGENT_MAX_TOOL_ROUNDS", 12)
