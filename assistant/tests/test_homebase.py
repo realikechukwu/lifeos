@@ -11,12 +11,17 @@ from urllib.parse import parse_qs, urlsplit
 
 from django.core.management import call_command
 from django.core.management.base import CommandError
-from django.test import SimpleTestCase, override_settings
+from django.test import SimpleTestCase, TestCase, override_settings
 from django.utils import timezone
 
 from assistant.agent.loop import READ_ONLY_TOOLS, _run_tool
 from assistant.agent.tools import ACTIVE_TOOL_DEFINITIONS, HANDLERS, TOOL_DEFINITIONS, ToolContext, ToolInputError
+from assistant.agent.proposals import decide, summary
 from assistant.services import homebase
+from assistant.services.telegram_handlers import process_telegram_update
+from assistant.tests.test_agent import AGENT_SETTINGS, AgentFakeBot
+from assistant.tests.test_telegram import message_update
+from core.models import AgentJob, AgentMessage, AgentProposal, AgentThread
 
 PASSWORD = "correct-horse-battery"
 HOMEBASE_SETTINGS = {
@@ -28,6 +33,11 @@ HOMEBASE_SETTINGS = {
 }
 DOC_ID = "0b6d3c1e-7f2a-4c55-9e1d-2a3b4c5d6e7f"
 TOOL_NAMES = {"homebase_snags", "homebase_documents", "homebase_insurance", "homebase_wifi", "homebase_read_document"}
+WRITE_TOOL_NAMES = {"propose_homebase_snag", "propose_homebase_snag_update",
+                    "propose_homebase_document_update", "propose_homebase_insurance_update"}
+SNAG_ID = "5a1e2b3c-4d5e-4f60-8a7b-9c0d1e2f3a4b"
+POLICY_ID = "7c8d9e0f-1a2b-4c3d-8e4f-5a6b7c8d9e0f"
+BASE_UPDATED = "2026-10-01T09:00:00.123456+00:00"
 
 
 class FakeResponse(BytesIO):
@@ -45,20 +55,38 @@ class FakeSupabase:
         self.tables = tables or {}
         self.files = files or {}
         self.requests = []
+        self.writes = []
         self.sign_ins = 0
         self.reject_next_token = False
+        self.update_matches = True
+        self.reject_insert = False
 
     def __call__(self, request, timeout=None):
         url = urlsplit(request.full_url)
         self.requests.append(request)
+        method = request.get_method()
         if url.path == "/auth/v1/token":
             self.sign_ins += 1
-            return FakeResponse(json.dumps({"access_token": f"token-{self.sign_ins}", "expires_in": 3600}).encode())
+            return FakeResponse(json.dumps({"access_token": f"token-{self.sign_ins}", "expires_in": 3600,
+                                            "user": {"id": "lifeos-user"}}).encode())
         if self.reject_next_token:
             self.reject_next_token = False
             raise HTTPError(request.full_url, 401, "Unauthorized", {}, None)
         if url.path.startswith("/rest/v1/"):
-            return FakeResponse(json.dumps(self.tables[url.path.removeprefix("/rest/v1/")]).encode())
+            table = url.path.removeprefix("/rest/v1/")
+            if method == "GET":
+                return FakeResponse(json.dumps(self.tables[table]).encode())
+            body = json.loads(request.data)
+            self.writes.append((method, table, parse_qs(url.query), body))
+            if method == "POST" and self.reject_insert:
+                error = BytesIO(b'{"code": "42501", "message": "new row violates row-level security policy"}')
+                raise HTTPError(request.full_url, 403, "Forbidden", {}, error)
+            if method == "PATCH" and not self.update_matches:
+                return FakeResponse(b"[]")
+            return FakeResponse(json.dumps([{"id": "new-snag", **body}]).encode())
+        if url.path.startswith("/storage/v1/object/snag-photos/"):
+            self.writes.append((method, "snag-photos", url.path.rsplit("/", 1)[1], request.data))
+            return FakeResponse(b"{}")
         return FakeResponse(self.files[url.path.removeprefix("/storage/v1/object/authenticated/documents/")])
 
     def queries(self, table):
@@ -89,7 +117,7 @@ class ChunkedSupabase(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         self.rfile.read(int(self.headers["Content-Length"]))
-        self._send(b'{"access_token": "token-1", "expires_in": 3600}')
+        self._send(b'{"access_token": "token-1", "expires_in": 3600, "user": {"id": "lifeos-user"}}')
 
     def do_GET(self):
         self._send(b'[{"id": "a"}]')
@@ -176,12 +204,14 @@ class HomebaseToolTests(SimpleTestCase):
         self.addCleanup(patcher.stop)
         return fake
 
-    def test_tools_are_registered_read_only_and_off_by_default(self):
-        self.assertTrue(TOOL_NAMES <= {t["name"] for t in TOOL_DEFINITIONS})
-        self.assertTrue(TOOL_NAMES <= set(HANDLERS))
+    def test_tools_are_registered_and_off_by_default(self):
+        names = TOOL_NAMES | WRITE_TOOL_NAMES
+        self.assertTrue(names <= {t["name"] for t in TOOL_DEFINITIONS})
+        self.assertTrue(names <= set(HANDLERS))
         self.assertTrue(TOOL_NAMES <= READ_ONLY_TOOLS)
+        self.assertFalse(WRITE_TOOL_NAMES & READ_ONLY_TOOLS)
         # The test environment starts with AGENT_HOMEBASE_ENABLED unset.
-        self.assertFalse(TOOL_NAMES & {t["name"] for t in ACTIVE_TOOL_DEFINITIONS})
+        self.assertFalse(names & {t["name"] for t in ACTIVE_TOOL_DEFINITIONS})
 
     @override_settings(AGENT_HOMEBASE_ENABLED=False)
     def test_disabled_tools_refuse(self):
@@ -300,3 +330,139 @@ class HomebaseCheckCommandTests(SimpleTestCase):
         with patch("assistant.services.homebase.urlopen", FakeSupabase(tables=tables)):
             with self.assertRaisesMessage(CommandError, "approved Homebase owner"):
                 call_command("homebase_check", stdout=StringIO())
+
+
+@override_settings(**AGENT_SETTINGS, **HOMEBASE_SETTINGS, AGENT_PROPOSALS_ENABLED=True)
+class HomebaseProposalTests(TestCase):
+    def setUp(self):
+        homebase._token.update(value="", expires_at=0.0, user_id="")
+        bot = AgentFakeBot()
+        process_telegram_update(message_update(1, text="Log a snag"), bot=bot)
+        job = AgentJob.objects.get()
+        self.thread = AgentThread.objects.create(
+            channel="telegram", role="ike", telegram_user=job.telegram_user,
+            telegram_chat=job.telegram_chat, last_activity_at=timezone.now(),
+        )
+        self.ctx = ToolContext(role="ike", speaker_name="Ike", thread=self.thread,
+                               telegram_user=job.telegram_user, telegram_chat=job.telegram_chat, bot=bot)
+        self.fake = FakeSupabase(tables={
+            "snags": [{"id": SNAG_ID, "updated_at": BASE_UPDATED, "title": "Dripping tap", "room": "Kitchen",
+                       "description": None, "status": "open", "severity": "low"}],
+            "insurance_summary": [{"id": POLICY_ID, "updated_at": BASE_UPDATED, "insurer_name": "Aviva",
+                                   "policy_type": "home", "policy_number": "HX1", "claims_phone": "0800 000",
+                                   "renewal_date": "2026-12-01", "buildings_excess": 200, "contents_excess": None,
+                                   "key_exclusions": None, "notes": None}],
+            "documents": [{"id": DOC_ID, "updated_at": BASE_UPDATED, "title": "Memory aid: boiler",
+                           "expiry_date": None, "reminder_date": None, "notes": '{"steps": []}'}],
+        })
+        patcher = patch("assistant.services.homebase.urlopen", self.fake)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def propose(self, tool, args):
+        result = json.loads(HANDLERS[tool](self.ctx, args))
+        return AgentProposal.objects.get(pk=result["proposal_id"])
+
+    def send_photo(self, data=b"jpeg-bytes"):
+        AgentMessage.objects.create(thread=self.thread, role="user", content=[], content_json=json.dumps([
+            {"type": "text", "text": "This is leaking"},
+            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
+                                         "data": base64.b64encode(data).decode()}},
+        ]))
+
+    def test_new_snag_with_the_chat_photo_waits_for_confirm(self):
+        self.send_photo()
+        proposal = self.propose("propose_homebase_snag", {
+            "title": "Leaking radiator valve", "room": "Hall", "severity": "high", "attach_photo": True,
+        })
+        self.assertEqual(proposal.status, "pending")
+        self.assertFalse(self.fake.writes)
+        card = summary(proposal)
+        self.assertIn("Log Homebase snag", card)
+        self.assertIn("Photo: attached from this chat", card)
+
+        decide(proposal, confirm=True)
+        proposal.refresh_from_db()
+        self.assertEqual(proposal.status, "confirmed")
+        self.assertEqual(proposal.result["snag_id"], "new-snag")
+        (_, bucket, path, data), (method, table, _, row) = self.fake.writes
+        self.assertEqual((bucket, data), ("snag-photos", b"jpeg-bytes"))
+        self.assertTrue(path.endswith(".jpg"))
+        self.assertEqual((method, table), ("POST", "snags"))
+        self.assertEqual(row, {"title": "Leaking radiator valve", "room": "Hall", "severity": "high", "status": "open",
+                               "description": None, "photo_url": path, "reported_by": "lifeos-user"})
+
+    def test_photo_must_come_from_the_conversation(self):
+        with self.assertRaisesMessage(ToolInputError, "no photo in this conversation"):
+            self.propose("propose_homebase_snag", {"title": "Crack", "room": "Hall", "attach_photo": True})
+        proposal = self.propose("propose_homebase_snag", {"title": "Crack", "room": "Hall",
+                                                          "photo": {"message_id": 1, "index": 0}})
+        self.assertNotIn("photo", proposal.payload)
+        self.assertEqual(proposal.payload["severity"], "medium")
+
+    def test_failed_insert_removes_the_uploaded_photo(self):
+        self.send_photo()
+        proposal = self.propose("propose_homebase_snag", {"title": "Crack", "room": "Hall", "attach_photo": True})
+        self.fake.reject_insert = True
+        decide(proposal, confirm=True)
+        proposal.refresh_from_db()
+        self.assertEqual(proposal.status, "failed")
+        self.assertIn("row-level security", proposal.result["detail"])
+        self.assertEqual([w[0] for w in self.fake.writes], ["POST", "POST", "DELETE"])
+
+    def test_resolving_a_snag_only_saves_if_unchanged_since_proposed(self):
+        proposal = self.propose("propose_homebase_snag_update", {"snag_id": SNAG_ID, "status": "resolved", "severity": "low"})
+        self.assertEqual(proposal.payload["changes"], {"status": "resolved"})
+        self.assertIn("Status: open → resolved", summary(proposal))
+        self.assertIn("Dripping tap (Kitchen)", summary(proposal))
+
+        decide(proposal, confirm=True)
+        method, table, query, values = self.fake.writes[0]
+        self.assertEqual((method, table), ("PATCH", "snags"))
+        self.assertEqual(query, {"id": [f"eq.{SNAG_ID}"], "updated_at": [f"eq.{BASE_UPDATED}"]})
+        self.assertEqual(values["status"], "resolved")
+        self.assertEqual(values["resolved_at"], values["updated_at"])
+
+    def test_a_record_edited_in_homebase_meanwhile_is_not_overwritten(self):
+        proposal = self.propose("propose_homebase_snag_update", {"snag_id": SNAG_ID, "status": "in_progress"})
+        self.fake.update_matches = False
+        decide(proposal, confirm=True)
+        proposal.refresh_from_db()
+        self.assertEqual(proposal.status, "failed")
+        self.assertIn("changed in Homebase", proposal.result["detail"])
+
+    def test_insurance_amounts_and_card(self):
+        proposal = self.propose("propose_homebase_insurance_update", {
+            "policy_id": POLICY_ID, "buildings_excess": "250", "renewal_date": "2027-12-01",
+        })
+        self.assertEqual(proposal.payload["changes"], {"buildings_excess": 250.0, "renewal_date": "2027-12-01"})
+        card = summary(proposal)
+        self.assertIn("Aviva home policy", card)
+        self.assertIn("Buildings excess: £200.00 → £250.00", card)
+        self.assertIn("Renewal date: 2026-12-01 → 2027-12-01", card)
+
+    def test_invalid_changes_are_refused(self):
+        for tool, args, message in [
+            ("propose_homebase_snag_update", {"snag_id": SNAG_ID, "severity": "low"}, "unchanged"),
+            ("propose_homebase_snag_update", {"snag_id": SNAG_ID, "title": None}, "cannot be cleared"),
+            ("propose_homebase_snag_update", {"snag_id": "1", "status": "resolved"}, "id returned"),
+            ("propose_homebase_insurance_update", {"policy_id": POLICY_ID, "renewal_date": "1 Dec"}, "YYYY-MM-DD"),
+            ("propose_homebase_insurance_update", {"policy_id": POLICY_ID, "contents_excess": True}, "amount"),
+            ("propose_homebase_document_update", {"document_id": DOC_ID, "notes": "Replace"}, "structured data"),
+            ("propose_homebase_snag", {"title": "Crack"}, "title and a room"),
+        ]:
+            with self.subTest(args=args), self.assertRaisesMessage(ToolInputError, message):
+                self.propose(tool, args)
+        self.assertEqual(AgentProposal.objects.count(), 0)
+
+    def test_document_dates_can_be_set_and_cleared(self):
+        proposal = self.propose("propose_homebase_document_update", {"document_id": DOC_ID, "expiry_date": "2027-03-01"})
+        self.assertIn("Expiry date: (none) → 2027-03-01", summary(proposal))
+
+    def test_switching_homebase_off_stops_pending_changes(self):
+        proposal = self.propose("propose_homebase_snag_update", {"snag_id": SNAG_ID, "status": "resolved"})
+        with self.settings(AGENT_HOMEBASE_ENABLED=False):
+            decide(proposal, confirm=True)
+        proposal.refresh_from_db()
+        self.assertEqual(proposal.status, "failed")
+        self.assertFalse(self.fake.writes)

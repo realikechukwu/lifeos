@@ -839,6 +839,10 @@ class AgentProposal(models.Model):
         CANCEL_EVENT = "cancel_event", "Cancel event"
         CANCEL_REMINDER = "cancel_reminder", "Cancel reminder"
         UPDATE_NOTE = "update_note", "Update note"
+        HOMEBASE_CREATE_SNAG = "homebase_create_snag", "Log Homebase snag"
+        HOMEBASE_UPDATE_SNAG = "homebase_update_snag", "Update Homebase snag"
+        HOMEBASE_UPDATE_DOCUMENT = "homebase_update_document", "Update Homebase document"
+        HOMEBASE_UPDATE_INSURANCE = "homebase_update_insurance", "Update Homebase insurance"
 
     class Status(models.TextChoices):
         PENDING = "pending", "Pending"
