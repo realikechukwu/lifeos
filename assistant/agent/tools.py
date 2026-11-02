@@ -23,12 +23,14 @@ from .documents import HANDLERS as DOCUMENT_HANDLERS, TOOL_DEFINITIONS as DOCUME
 
 from assistant.services.google_calendar import list_calendar_events
 from assistant.services import personal_inbox
+from assistant.services.notes import MAX_NOTE_CHARS, normalised_body
 from assistant.services.telegram_inbox import calendar_items_between
 
 logger = logging.getLogger(__name__)
 
 MAX_CALENDAR_DAYS = 120
 MAX_ACTIVE_MEMORIES = 100
+NOTE_PREVIEW_CHARS = 2000
 
 
 @dataclass
@@ -140,17 +142,38 @@ def search_notes(ctx: ToolContext, args: dict) -> str:
     queryset = Note.objects.all()
     if query:
         queryset = queryset.filter(Q(title__icontains=query) | Q(body__icontains=query))
-    notes = [
-        {
+    notes = []
+    for note in queryset.order_by("-updated_at")[:10]:
+        body = normalised_body(note)
+        item = {
             "id": note.id,
             "title": note.title,
             "category": note.category,
-            "body": note.body[:2000],
+            "body": body[:NOTE_PREVIEW_CHARS],
             "updated_at": note.updated_at.date(),
         }
-        for note in queryset.order_by("-updated_at")[:10]
-    ]
+        if len(body) > NOTE_PREVIEW_CHARS:
+            item["truncated"] = True
+        notes.append(item)
     return _dumps({"notes": notes})
+
+
+def read_note(ctx: ToolContext, args: dict) -> str:
+    note_id = args.get("note_id")
+    note = Note.objects.filter(pk=note_id).first() if type(note_id) is int else None
+    if note is None:
+        raise ToolInputError("No note with that id exists; use an id from search_notes.")
+    body = normalised_body(note)
+    result = {
+        "id": note.id,
+        "title": note.title,
+        "category": note.category,
+        "body": body[:MAX_NOTE_CHARS],
+        "updated_at": note.updated_at,
+    }
+    if len(body) > MAX_NOTE_CHARS:
+        result["truncated"] = True
+    return _dumps(result)
 
 
 def remember(ctx: ToolContext, args: dict) -> str:
@@ -309,10 +332,20 @@ _DEFINITIONS = [
         },
     },
     {
+        "name": "read_note",
+        "description": "Read one LifeOS note in full by id, before quoting it in propose_update_note.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"note_id": {"type": "integer"}},
+            "required": ["note_id"],
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "search_notes",
         "description": (
             "Search LifeOS notes by text in the title or body; an empty query returns the "
-            "ten most recently updated notes."
+            "ten most recently updated notes. Long bodies are cut short (truncated: true)."
         ),
         "input_schema": {
             "type": "object",
@@ -342,6 +375,7 @@ HANDLERS = {
     **{name: (lambda ctx, args, handler=handler: _dumps(handler(ctx, args)))
        for name, handler in {**PROPOSAL_HANDLERS, **DOCUMENT_HANDLERS}.items()},
     "read_my_email": read_my_email,
+    "read_note": read_note,
     "search_my_inbox": search_my_inbox,
     "search_notes": search_notes,
 }

@@ -224,6 +224,8 @@ AGENT_ENABLED = _bool_env("AGENT_ENABLED", False)
 AGENT_PROPOSALS_ENABLED = _bool_env("AGENT_PROPOSALS_ENABLED", False)
 AGENT_EMAIL_ENABLED = _bool_env("AGENT_EMAIL_ENABLED", False)
 AGENT_DOCUMENTS_ENABLED = _bool_env("AGENT_DOCUMENTS_ENABLED", False)
+# Photos sent on Telegram (letters, appointment cards) go to the agent.
+AGENT_PHOTOS_ENABLED = _bool_env("AGENT_PHOTOS_ENABLED", False)
 # Server tools are selected once at worker startup; restart to change this.
 AGENT_WEB_ENABLED = _bool_env("AGENT_WEB_ENABLED", False)
 # Read-only access to each person's own Gmail (signed in with
