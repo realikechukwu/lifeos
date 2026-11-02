@@ -843,6 +843,9 @@ class AgentProposal(models.Model):
         HOMEBASE_UPDATE_SNAG = "homebase_update_snag", "Update Homebase snag"
         HOMEBASE_UPDATE_DOCUMENT = "homebase_update_document", "Update Homebase document"
         HOMEBASE_UPDATE_INSURANCE = "homebase_update_insurance", "Update Homebase insurance"
+        HOMEBASE_CREATE_DOCUMENT = "homebase_create_document", "File Homebase document"
+        HOMEBASE_CREATE_MEMORY_AID = "homebase_create_memory_aid", "Save Homebase memory aid"
+        HOMEBASE_CREATE_INSURANCE = "homebase_create_insurance", "Add Homebase insurance policy"
 
     class Status(models.TextChoices):
         PENDING = "pending", "Pending"

@@ -34,7 +34,8 @@ HOMEBASE_SETTINGS = {
 DOC_ID = "0b6d3c1e-7f2a-4c55-9e1d-2a3b4c5d6e7f"
 TOOL_NAMES = {"homebase_snags", "homebase_documents", "homebase_insurance", "homebase_wifi", "homebase_read_document"}
 WRITE_TOOL_NAMES = {"propose_homebase_snag", "propose_homebase_snag_update",
-                    "propose_homebase_document_update", "propose_homebase_insurance_update"}
+                    "propose_homebase_document_update", "propose_homebase_insurance_update",
+                    "propose_homebase_document", "propose_homebase_memory_aid", "propose_homebase_insurance"}
 SNAG_ID = "5a1e2b3c-4d5e-4f60-8a7b-9c0d1e2f3a4b"
 POLICY_ID = "7c8d9e0f-1a2b-4c3d-8e4f-5a6b7c8d9e0f"
 BASE_UPDATED = "2026-10-01T09:00:00.123456+00:00"
@@ -84,8 +85,9 @@ class FakeSupabase:
             if method == "PATCH" and not self.update_matches:
                 return FakeResponse(b"[]")
             return FakeResponse(json.dumps([{"id": "new-snag", **body}]).encode())
-        if url.path.startswith("/storage/v1/object/snag-photos/"):
-            self.writes.append((method, "snag-photos", url.path.rsplit("/", 1)[1], request.data))
+        if method in {"POST", "DELETE"} and url.path.startswith("/storage/v1/object/"):
+            bucket, path = url.path.removeprefix("/storage/v1/object/").split("/", 1)
+            self.writes.append((method, bucket, path, request.data))
             return FakeResponse(b"{}")
         return FakeResponse(self.files[url.path.removeprefix("/storage/v1/object/authenticated/documents/")])
 
@@ -249,6 +251,17 @@ class HomebaseToolTests(SimpleTestCase):
         self.assertEqual(fake.queries("documents")[0]["category"], ["eq.property"])
         self.assertEqual([d["id"] for d in result["documents"]], ["c", "a"])
 
+    def test_memory_aids_say_where_things_are(self):
+        self._fake(tables={"documents": [
+            {"id": "a", "title": "Water stopcock", "category": "property", "subcategory": "Memory Aid", "file_name": "s.jpg",
+             "file_url": "s.jpg", "notes": 'MEMORY_AID::{"location_description":"Under the sink","notes":"Turn clockwise"}',
+             "expiry_date": None, "reminder_date": None},
+        ]})
+        doc = _call("homebase_documents", {"category": "any", "search": "sink", "expiring_within_days": 0})["documents"][0]
+        self.assertTrue(doc["memory_aid"])
+        self.assertEqual(doc["kept_where"], "Under the sink")
+        self.assertEqual(doc["notes"], "Turn clockwise")
+
     def test_documents_search_and_file_names(self):
         self._fake(tables={"documents": [
             {"id": "a", "title": "Boiler warranty", "category": "property", "subcategory": None, "file_name": "w.pdf",
@@ -352,8 +365,9 @@ class HomebaseProposalTests(TestCase):
                                    "policy_type": "home", "policy_number": "HX1", "claims_phone": "0800 000",
                                    "renewal_date": "2026-12-01", "buildings_excess": 200, "contents_excess": None,
                                    "key_exclusions": None, "notes": None}],
-            "documents": [{"id": DOC_ID, "updated_at": BASE_UPDATED, "title": "Memory aid: boiler",
-                           "expiry_date": None, "reminder_date": None, "notes": '{"steps": []}'}],
+            "documents": [{"id": DOC_ID, "updated_at": BASE_UPDATED, "title": "Boiler reset",
+                           "expiry_date": None, "reminder_date": None,
+                           "notes": 'MEMORY_AID::{"location_description":"Airing cupboard"}'}],
         })
         patcher = patch("assistant.services.homebase.urlopen", self.fake)
         patcher.start()
@@ -368,6 +382,14 @@ class HomebaseProposalTests(TestCase):
             {"type": "text", "text": "This is leaking"},
             {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
                                          "data": base64.b64encode(data).decode()}},
+        ]))
+
+    def send_pdf(self, name="Gas Safety (2026).pdf", data=b"%PDF-1.7"):
+        AgentMessage.objects.create(thread=self.thread, role="user", content=[], content_json=json.dumps([
+            {"type": "text", "text": "File this please"},
+            {"type": "text", "text": f"Untrusted uploaded document: {name}"},
+            {"type": "document", "source": {"type": "base64", "media_type": "application/pdf",
+                                            "data": base64.b64encode(data).decode()}},
         ]))
 
     def test_new_snag_with_the_chat_photo_waits_for_confirm(self):
@@ -466,3 +488,82 @@ class HomebaseProposalTests(TestCase):
         proposal.refresh_from_db()
         self.assertEqual(proposal.status, "failed")
         self.assertFalse(self.fake.writes)
+
+    def test_memory_aid_from_the_chat_photo(self):
+        self.send_photo(b"stopcock-jpeg")
+        proposal = self.propose("propose_homebase_memory_aid", {
+            "title": "Water stopcock", "location_description": "Under the kitchen sink, behind the bin",
+        })
+        card = summary(proposal)
+        self.assertIn("Save Homebase memory aid", card)
+        self.assertIn("Kept: Under the kitchen sink, behind the bin", card)
+        self.assertIn("File: Water_stopcock.jpg, from this chat", card)
+
+        decide(proposal, confirm=True)
+        proposal.refresh_from_db()
+        self.assertEqual(proposal.status, "confirmed", proposal.result)
+        (_, bucket, path, data), (_, table, _, row) = self.fake.writes
+        self.assertEqual((bucket, data, table), ("documents", b"stopcock-jpeg", "documents"))
+        self.assertTrue(path.endswith("-Water_stopcock.jpg"))
+        self.assertEqual(row, {
+            "title": "Water stopcock", "file_url": path, "file_name": "Water_stopcock.jpg", "file_size": 13,
+            "uploaded_by": "lifeos-user", "category": "property", "subcategory": "Memory Aid",
+            "expiry_date": None, "reminder_date": None,
+            "notes": 'MEMORY_AID::{"location_description":"Under the kitchen sink, behind the bin"}',
+        })
+
+    def test_memory_aids_need_a_photo_not_a_pdf(self):
+        self.send_pdf()
+        with self.assertRaisesMessage(ToolInputError, "no photo in this conversation"):
+            self.propose("propose_homebase_memory_aid", {"title": "Fuse box", "location_description": "Garage"})
+
+    def test_document_from_a_pdf_keeps_its_name(self):
+        self.send_pdf()
+        proposal = self.propose("propose_homebase_document", {
+            "title": "Gas safety certificate", "category": "property", "expiry_date": "2027-10-30",
+            "file": {"message_id": 999, "index": 0},
+        })
+        self.assertEqual(proposal.payload["file"]["file_name"], "Gas_Safety__2026_.pdf")
+        card = summary(proposal)
+        self.assertIn("File Homebase document", card)
+        self.assertIn("Expiry date: 2027-10-30", card)
+
+        decide(proposal, confirm=True)
+        (_, bucket, path, data), (_, table, _, row) = self.fake.writes
+        self.assertEqual((bucket, data), ("documents", b"%PDF-1.7"))
+        self.assertEqual(row["category"], "property")
+        self.assertEqual(row["expiry_date"], "2027-10-30")
+        self.assertEqual(row["file_name"], "Gas_Safety__2026_.pdf")
+        self.assertIsNone(row["subcategory"])
+
+    def test_document_rules(self):
+        with self.assertRaisesMessage(ToolInputError, "no photo or PDF in this conversation"):
+            self.propose("propose_homebase_document", {"title": "Warranty", "category": "property"})
+        self.send_photo()
+        for args, message in [
+            ({"title": "Warranty"}, "Missing: category"),
+            ({"title": "Boiler", "category": "property", "subcategory": "Memory aid"}, "propose_homebase_memory_aid"),
+            ({"title": "Bill", "category": "council"}, "category must be one of"),
+        ]:
+            with self.subTest(args=args), self.assertRaisesMessage(ToolInputError, message):
+                self.propose("propose_homebase_document", args)
+
+    def test_new_insurance_policy(self):
+        with self.assertRaisesMessage(ToolInputError, "Missing: claims_phone"):
+            self.propose("propose_homebase_insurance", {"insurer_name": "Admiral", "policy_number": "AB1", "renewal_date": "2027-03-03"})
+        proposal = self.propose("propose_homebase_insurance", {
+            "insurer_name": "Admiral", "policy_type": "car", "policy_number": "AB1",
+            "claims_phone": "0333 220 2000", "renewal_date": "2027-03-03", "contents_excess": 100,
+        })
+        card = summary(proposal)
+        self.assertIn("Admiral car policy", card)
+        self.assertIn("Policy number: AB1", card)
+        self.assertIn("Contents excess: £100.00", card)
+
+        decide(proposal, confirm=True)
+        method, table, _, row = self.fake.writes[0]
+        self.assertEqual((method, table), ("POST", "insurance_summary"))
+        self.assertEqual(row["insurer_name"], "Admiral")
+        self.assertEqual(row["contents_excess"], 100.0)
+        self.assertIsNone(row["buildings_excess"])
+        self.assertNotIn("title", row)
