@@ -12,7 +12,7 @@ from assistant.services.gmail import GmailService, is_authorised_sender
 from .loop import PROMPT_VERSION, append_input, run_turn
 from .proposals import context_outcomes, summary
 from .tools import ToolContext
-from .documents import DOCX_MIME, PDF_MIME, add_upload, attachments_for_job, upload_context
+from .documents import PDF_MIME, READABLE_MIMES, UPLOAD_LABELS, add_upload, attachments_for_job, upload_context
 from .proposals import ToolInputError
 import base64
 
@@ -39,7 +39,8 @@ def attachment_blocks(contents):
     blocks = []
     for attachment in contents:
         mime = attachment["mime_type"]
-        if mime == DOCX_MIME:
+        # Word, Markdown and text files reach the model as extracted text instead.
+        if mime in READABLE_MIMES and mime != PDF_MIME:
             continue
         blocks.append({"type": "text", "text": f"Untrusted attachment: {attachment['filename']}"})
         blocks.append({
@@ -69,13 +70,14 @@ def enqueue_email(incoming, gmail_service, label_map, contents):
         })
         if created and settings.AGENT_DOCUMENTS_ENABLED:
             for attachment in contents:
-                if attachment["mime_type"] not in {DOCX_MIME, PDF_MIME}:
+                mime = attachment["mime_type"]
+                if mime not in READABLE_MIMES:
                     continue
                 try:
                     upload = add_upload(job, role=sender_role(incoming.outer_sender), filename=attachment["filename"],
-                                        mime_type=attachment["mime_type"], data=base64.b64decode(attachment["data"], validate=True))
-                    if attachment["mime_type"] == DOCX_MIME:
-                        job.input_blocks.append({"type": "text", "text": f"Untrusted DOCX {upload.filename}:\n{upload.text}"})
+                                        mime_type=mime, data=base64.b64decode(attachment["data"], validate=True))
+                    if mime != PDF_MIME:
+                        job.input_blocks.append({"type": "text", "text": f"Untrusted {UPLOAD_LABELS[mime]} {upload.filename}:\n{upload.text}"})
                 except (ToolInputError, ValueError) as exc:
                     job.input_blocks.append({"type": "text", "text": f"Attachment text extraction failed: {exc}"})
             job.save(update_fields=["input_blocks"])

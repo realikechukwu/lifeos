@@ -14,9 +14,9 @@ from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
 from assistant.agent.documents import (
-    DOCX_MIME, PDF_MIME, MAX_UPLOAD_BYTES, add_upload, email_me, extract_text,
+    DOCX_MIME, MARKDOWN_MIME, PDF_MIME, TEXT_MIME, MAX_UPLOAD_BYTES, add_upload, email_me, extract_text,
     list_profile_documents, make_document, read_profile_document, save_profile_document,
-    send_generated_document, send_telegram_documents,
+    send_generated_document, send_telegram_documents, upload_mime,
 )
 from assistant.agent.loop import run_turn
 from assistant.agent.proposals import ToolInputError
@@ -88,10 +88,33 @@ class DocumentAgentTests(TestCase):
         with self.assertRaises(ToolInputError):
             extract_text(stream.getvalue(), DOCX_MIME)
 
-    def upload(self, update_id, mime, data):
+    def test_extracts_markdown_and_text_as_utf8(self):
+        self.assertEqual(extract_text("﻿# Rota\r\n- **Mon** nights £\r\n".encode(), MARKDOWN_MIME), "# Rota\n- **Mon** nights £")
+        self.assertEqual(extract_text(b"Bins on Tuesday", TEXT_MIME), "Bins on Tuesday")
+        for data in [b"\xff\xfe# Rota", b"# Rota\x00binary"]:
+            with self.subTest(data=data), self.assertRaises(ToolInputError):
+                extract_text(data, MARKDOWN_MIME)
+        with self.assertRaisesMessage(ToolInputError, "Markdown"):
+            extract_text(b"PK\x03\x04", "application/zip")
+
+    def test_upload_mime_uses_the_extension_when_the_declared_type_is_vague(self):
+        for filename, declared, expected in [
+            ("rota.md", "text/markdown", MARKDOWN_MIME), ("rota.md", "text/x-markdown; charset=utf-8", MARKDOWN_MIME),
+            ("rota.md", "application/octet-stream", MARKDOWN_MIME), ("ROTA.MD", "", MARKDOWN_MIME),
+            ("rota.md", "text/plain", MARKDOWN_MIME), ("notes.markdown", None, MARKDOWN_MIME),
+            ("notes.txt", "text/plain", TEXT_MIME), ("notes", "text/plain", TEXT_MIME), (None, "text/markdown", MARKDOWN_MIME),
+            ("cv.pdf", "application/pdf", PDF_MIME), ("cv.docx", DOCX_MIME, DOCX_MIME),
+            ("rota.md", "application/zip", None), ("script.py", "text/x-python", None), ("page.html", "text/html", None),
+            ("archive.zip", "application/octet-stream", None),
+        ]:
+            with self.subTest(filename=filename, declared=declared):
+                self.assertEqual(upload_mime(filename, declared), expected)
+
+    def upload(self, update_id, mime, data, filename=None):
         payload = message_update(update_id, text="")
         payload["message"]["caption"] = "Save this as my CV"
-        payload["message"]["document"] = {"file_id": "file", "file_name": "CV.pdf" if mime == PDF_MIME else "CV.docx", "mime_type": mime, "file_size": len(data)}
+        filename = filename or ("CV.pdf" if mime == PDF_MIME else "CV.docx")
+        payload["message"]["document"] = {"file_id": "file", "file_name": filename, "mime_type": mime, "file_size": len(data)}
         self.bot.download_file = Mock(return_value=data)
         process_telegram_update(payload, bot=self.bot)
         return AgentJob.objects.get(telegram_update_id=update_id)
@@ -108,6 +131,22 @@ class DocumentAgentTests(TestCase):
         job = self.upload(3, DOCX_MIME, docx_bytes())
         self.assertIn("Untrusted DOCX extracted text", job.input_blocks[-1]["text"])
         self.assertIn("Consultant cardiologist", job.input_blocks[-1]["text"])
+
+    def test_telegram_markdown_upload_shows_text_even_when_typed_as_binary(self):
+        job = self.upload(7, "application/octet-stream", b"# Experience\n- **NHS** cardiology", filename="cv.md")
+        self.assertEqual(job.input_blocks[-1]["text"], "Untrusted Markdown extracted text:\n# Experience\n- **NHS** cardiology")
+        upload = job.uploads.get()
+        self.assertEqual((upload.mime_type, upload.filename), (MARKDOWN_MIME, "cv.md"))
+        result = save_profile_document(ToolContext(role="ike", speaker_name="Ike", thread=self.thread, job=job), {"title": "CV", "kind": "cv"})
+        self.assertEqual(ProfileDocument.objects.get(pk=result["profile_document_id"]).text, upload.text)
+
+    def test_telegram_unreadable_file_type_is_refused_before_download(self):
+        payload = message_update(8, text="")
+        payload["message"]["document"] = {"file_id": "file", "file_name": "photos.zip", "mime_type": "application/zip", "file_size": 20}
+        self.bot.get_file = Mock()
+        process_telegram_update(payload, bot=self.bot)
+        self.bot.get_file.assert_not_called()
+        self.assertIn("Markdown or text file", self.bot.messages[-1][1])
 
     @override_settings(AGENT_DOCUMENTS_ENABLED=False)
     def test_upload_disabled_does_not_download(self):
@@ -245,6 +284,21 @@ class EmailDocumentTests(TestCase):
         self.assertEqual(Document(BytesIO(attachment["data"])).paragraphs[0].text, "Cover letter")
         self.assertTrue(AgentJob.objects.get().document_deliveries.get().sent_at)
         self.assertIn("Untrusted DOCX", str(client.calls[0]["messages"]))
+
+    def test_markdown_and_text_email_attachments_reach_the_model_as_text(self):
+        msg = raw_email("What is on the rota?")
+        msg.add_attachment(b"# Rota\n- Mon nights", maintype="application", subtype="octet-stream", filename="rota.md")
+        msg.add_attachment("Bins on Tuesday", subtype="plain", filename="notes.txt")
+        self.gmail.messages["mdmail"] = (msg.as_bytes(), "thread-md")
+        self.poll()
+        client = FakeClient(reply(text("Mon nights.")))
+        self.run_client(client)
+        content = client.calls[0]["messages"][0]["content"]
+        texts = [block["text"] for block in content if block["type"] == "text"]
+        self.assertIn("Untrusted Markdown rota.md:\n# Rota\n- Mon nights", texts)
+        self.assertIn("Untrusted text notes.txt:\nBins on Tuesday", texts)
+        self.assertEqual([block["type"] for block in content].count("image"), 0)
+        self.assertEqual(sorted(AgentUpload.objects.values_list("mime_type", flat=True)), [MARKDOWN_MIME, TEXT_MIME])
 
 
 class DocumentTransportTests(TestCase):

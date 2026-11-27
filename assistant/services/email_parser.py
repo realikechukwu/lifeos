@@ -221,11 +221,15 @@ def parse_email_message(raw_bytes: bytes, *, include_attachment_content: bool = 
             if include_attachment_content:
                 metadata = attachments[-1]
                 content = part.get_payload(decode=True) or b""
-                supported = metadata["mime_type"] in {"application/pdf", "image/jpeg", "image/png"} or (
-                    settings.AGENT_DOCUMENTS_ENABLED and metadata["mime_type"] == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                )
+                mime = metadata["mime_type"]
+                supported = mime in {"application/pdf", "image/jpeg", "image/png"}
+                if settings.AGENT_DOCUMENTS_ENABLED and not supported:
+                    from assistant.agent.documents import READABLE_MIMES, upload_mime
+                    # Word, Markdown and text attachments are read as extracted text.
+                    mime = upload_mime(metadata["filename"], mime) or mime
+                    supported = mime in READABLE_MIMES
                 if supported and len(content) <= remaining:
-                    attachment_contents.append({**metadata, "data": base64.b64encode(content).decode("ascii")})
+                    attachment_contents.append({**metadata, "mime_type": mime, "data": base64.b64encode(content).decode("ascii")})
                     remaining -= len(content)
     except Exception:
         pass

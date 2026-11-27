@@ -1,6 +1,7 @@
 """Private upload extraction, profile sources and generated Word documents."""
 import base64
 from io import BytesIO
+from pathlib import PurePosixPath
 import re
 from zipfile import ZipFile
 
@@ -25,6 +26,30 @@ MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 MAX_TEXT_CHARS = 200000
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 PDF_MIME = "application/pdf"
+MARKDOWN_MIME = "text/markdown"
+TEXT_MIME = "text/plain"
+TEXT_MIMES = {MARKDOWN_MIME, TEXT_MIME}
+READABLE_MIMES = {PDF_MIME, DOCX_MIME, *TEXT_MIMES}
+TEXT_EXTENSIONS = {".md": MARKDOWN_MIME, ".markdown": MARKDOWN_MIME, ".txt": TEXT_MIME}
+TEXT_ALIASES = {"text/markdown": MARKDOWN_MIME, "text/x-markdown": MARKDOWN_MIME, "text/plain": TEXT_MIME}
+UPLOAD_LABELS = {PDF_MIME: "PDF", DOCX_MIME: "DOCX", MARKDOWN_MIME: "Markdown", TEXT_MIME: "text"}
+SUPPORTED_UPLOADS = "a PDF, Word, Markdown or text file"
+
+
+def upload_mime(filename, mime_type):
+    """The canonical type of an upload the agent can read, or None.
+
+    Telegram and mail clients label Markdown as text/markdown, text/x-markdown,
+    text/plain or application/octet-stream, so a text extension decides when
+    the declared type is vague.
+    """
+    mime_type = str(mime_type or "").split(";")[0].strip().lower()
+    if mime_type in {PDF_MIME, DOCX_MIME}:
+        return mime_type
+    suffix = PurePosixPath(str(filename or "")).suffix.lower()
+    if suffix in TEXT_EXTENSIONS and (mime_type in {"", "application/octet-stream"} or mime_type.startswith("text/")):
+        return TEXT_EXTENSIONS[suffix]
+    return TEXT_ALIASES.get(mime_type)
 
 
 def _enabled():
@@ -45,7 +70,7 @@ def _string(value, name, limit):
 
 def extract_text(data, mime_type):
     if not data or len(data) > MAX_UPLOAD_BYTES:
-        raise ToolInputError("Upload a PDF or DOCX no larger than 10 MB.")
+        raise ToolInputError(f"Upload {SUPPORTED_UPLOADS} no larger than 10 MB.")
     try:
         if mime_type == PDF_MIME:
             reader = PdfReader(BytesIO(data))
@@ -71,8 +96,17 @@ def extract_text(data, mime_type):
             for section in document.sections:
                 chunks += [p.text for p in section.header.paragraphs + section.footer.paragraphs]
             value = "\n".join(chunks)
+        elif mime_type in TEXT_MIMES:
+            # Markdown is plain text; the model reads its syntax directly.
+            try:
+                value = data.decode("utf-8-sig")
+            except UnicodeDecodeError:
+                raise ToolInputError("Save the Markdown or text file as UTF-8 and send it again.") from None
+            if "\x00" in value:
+                raise ToolInputError("That file is not plain text.")
+            value = value.replace("\r\n", "\n")
         else:
-            raise ToolInputError("Only PDF and DOCX files can be saved as profile documents.")
+            raise ToolInputError(f"Only {SUPPORTED_UPLOADS} can be read.")
     except ToolInputError:
         raise
     except Exception:
@@ -93,9 +127,9 @@ def handle_telegram_document(message, chat, user, update_id, bot):
     if AgentJob.objects.filter(telegram_update_id=update_id).exists():
         return
     doc = message["document"]
-    mime = doc.get("mime_type", "")
-    if mime not in {PDF_MIME, DOCX_MIME} or doc.get("file_size", 0) > MAX_UPLOAD_BYTES:
-        bot.send_message(chat.chat_id, "Send a PDF or DOCX no larger than 10 MB.")
+    mime = upload_mime(doc.get("file_name"), doc.get("mime_type"))
+    if mime is None or doc.get("file_size", 0) > MAX_UPLOAD_BYTES:
+        bot.send_message(chat.chat_id, f"Send {SUPPORTED_UPLOADS} no larger than 10 MB.")
         return
     remote = bot.get_file(doc["file_id"])
     if remote.get("file_size", 0) > MAX_UPLOAD_BYTES:
@@ -117,7 +151,7 @@ def handle_telegram_document(message, chat, user, update_id, bot):
             if mime == PDF_MIME:
                 blocks.append({"type": "document", "source": {"type": "base64", "media_type": PDF_MIME, "data": base64.b64encode(data).decode("ascii")}})
             else:
-                blocks.append({"type": "text", "text": "Untrusted DOCX extracted text:\n" + upload.text})
+                blocks.append({"type": "text", "text": f"Untrusted {UPLOAD_LABELS[mime]} extracted text:\n" + upload.text})
             job.input_blocks = blocks
             job.save(update_fields=["input_blocks"])
     except ToolInputError as exc:
