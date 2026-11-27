@@ -296,6 +296,16 @@ class HomebaseToolTests(SimpleTestCase):
         self.assertFalse(result["truncated"])
         self.assertIn("Untrusted", result["note"])
 
+    def test_read_document_reads_markdown_as_text(self):
+        self._fake(
+            tables={"documents": [{"id": DOC_ID, "title": "Boiler notes", "category": "property",
+                                   "file_name": "boiler.md", "file_url": "1700-boiler.md", "notes": ""}]},
+            files={"1700-boiler.md": b"# Boiler\n- Service due **March**"},
+        )
+        result = _call("homebase_read_document", {"document_id": DOC_ID})
+        self.assertEqual(result["text"], "# Boiler\n- Service due **March**")
+        self.assertFalse(result["truncated"])
+
     def test_read_document_returns_images_as_image_blocks(self):
         self._fake(
             tables={"documents": [{"id": DOC_ID, "title": "Meter reading", "category": "utility",
