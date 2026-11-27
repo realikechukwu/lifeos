@@ -10,10 +10,9 @@ request stays byte-identical and cacheable.
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import date, timedelta
-
-from django.db.models import Q
 
 from django.conf import settings
 
@@ -32,6 +31,8 @@ logger = logging.getLogger(__name__)
 MAX_CALENDAR_DAYS = 120
 MAX_ACTIVE_MEMORIES = 100
 NOTE_PREVIEW_CHARS = 2000
+MAX_NOTE_INDEX = 300
+SEARCH_STOP_WORDS = {"a", "an", "and", "at", "for", "in", "is", "it", "me", "my", "note", "of", "on", "our", "the", "to", "with"}
 
 
 @dataclass
@@ -138,13 +139,47 @@ def list_reminders(ctx: ToolContext, args: dict) -> str:
     return _dumps({"reminders": reminders})
 
 
+def _search_words(query: str) -> list[str]:
+    """Lower-case search words, dropping filler and a plural s ("lists" finds "list")."""
+    words = []
+    for word in re.findall(r"[^\W_]+", query.lower()):
+        if len(word) < 2 or word in SEARCH_STOP_WORDS:
+            continue
+        if len(word) > 3 and word.endswith("s") and not word.endswith("ss"):
+            word = word[:-1]
+        if word not in words:
+            words.append(word)
+    return words
+
+
+def _note_index() -> str:
+    notes = sorted(
+        Note.objects.only("id", "title", "category", "body", "updated_at")[:MAX_NOTE_INDEX],
+        key=lambda n: (n.category.strip().lower() or "~", str(n).lower()),
+    )
+    return _dumps({
+        "total": len(notes),
+        "notes": [{"id": n.id, "title": str(n), "category": n.category, "updated_at": n.updated_at.date()} for n in notes],
+        "next": "Call read_note with an id to read that note.",
+    })
+
+
 def search_notes(ctx: ToolContext, args: dict) -> str:
     query = str(args.get("query") or "").strip()[:100]
-    queryset = Note.objects.all()
-    if query:
-        queryset = queryset.filter(Q(title__icontains=query) | Q(body__icontains=query))
+    words = _search_words(query)
+    if not words:
+        return _note_index()
+    # Households keep tens of notes, so rank in Python rather than in SQL.
+    ranked = []
+    for note in Note.objects.all():
+        title, category, body = note.title.lower(), note.category.lower(), note.body.lower()
+        matched = [w for w in words if w in title or w in category or w in body]
+        if matched:
+            score = sum(3 * (w in title) + (w in category) + (w in body) for w in matched)
+            ranked.append((len(matched), score, note.updated_at, note))
+    ranked.sort(key=lambda r: r[:3], reverse=True)
     notes = []
-    for note in queryset.order_by("-updated_at")[:10]:
+    for count, _, _, note in ranked[:10]:
         body = normalised_body(note)
         item = {
             "id": note.id,
@@ -153,10 +188,15 @@ def search_notes(ctx: ToolContext, args: dict) -> str:
             "body": body[:NOTE_PREVIEW_CHARS],
             "updated_at": note.updated_at.date(),
         }
+        if count < len(words):
+            item["matched_words"] = f"{count} of {len(words)}"
         if len(body) > NOTE_PREVIEW_CHARS:
             item["truncated"] = True
         notes.append(item)
-    return _dumps({"notes": notes})
+    result = {"notes": notes}
+    if not notes:
+        result["next"] = "No note contains those words. Call search_notes with an empty query to list every note."
+    return _dumps(result)
 
 
 def read_note(ctx: ToolContext, args: dict) -> str:
@@ -345,8 +385,10 @@ _DEFINITIONS = [
     {
         "name": "search_notes",
         "description": (
-            "Search LifeOS notes by text in the title or body; an empty query returns the "
-            "ten most recently updated notes. Long bodies are cut short (truncated: true)."
+            "Find LifeOS notes. An empty query lists every note's id, title and category, without "
+            "text, so you can pick the right one. Otherwise each word is matched in the title, "
+            "category or text; notes with all the words come first (matched_words shows partial "
+            "matches), up to ten, with text previews. Long text is cut short (truncated: true)."
         ),
         "input_schema": {
             "type": "object",
