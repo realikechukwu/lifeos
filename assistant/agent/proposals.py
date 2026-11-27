@@ -82,8 +82,27 @@ NOTE_EDIT_PROPERTIES = {
 }
 NOTE_EDIT_DESCRIPTION = (
     "Propose changing a note. Read it in full with read_note first. Prefer edits and append; "
-    "Python checks every find matches exactly once and Telegram requires Confirm."
+    "Python checks every find matches exactly once. On a note in the Lists category, one-line "
+    "edits and append are saved at once (status confirmed); anything else needs Confirm on Telegram."
 )
+# Running lists change several times a day, so small line edits skip the Confirm tap.
+INSTANT_LIST_CATEGORY = "lists"
+MAX_INSTANT_APPEND_LINES = 20
+
+
+def is_instant_list_edit(kind, payload):
+    """A one-line edit or short append to a Lists note: applied without Confirm.
+
+    Rewrites and renames still wait. The previous text is kept by notes.update_note.
+    """
+    if kind != "update_note" or payload.get("body") is not None or payload.get("new_title"):
+        return False
+    note = Note.objects.filter(pk=payload["note_id"]).only("category").first()
+    if note is None or note.category.strip().lower() != INSTANT_LIST_CATEGORY:
+        return False
+    if any("\n" in edit["find"] or "\n" in edit["replace"] for edit in payload.get("edits", [])):
+        return False
+    return len((payload.get("append") or "").splitlines()) <= MAX_INSTANT_APPEND_LINES
 
 
 def _id(value, label):
@@ -387,7 +406,7 @@ def propose(ctx, args, *, kind):
     if old:
         edit_card(old, ctx.bot)
     ctx.proposal_ids.append(proposal.id)
-    if ctx.channel == "email" and kind in {*CREATE_TYPES, "complete_task"}:
+    if (ctx.channel == "email" and kind in {*CREATE_TYPES, "complete_task"}) or is_instant_list_edit(kind, payload):
         decide(proposal, confirm=True)
         proposal.refresh_from_db()
     return {"proposal_id": proposal.id, "status": proposal.status, "summary": summary(proposal), "result": proposal.result}

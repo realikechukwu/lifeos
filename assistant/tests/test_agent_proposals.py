@@ -5,7 +5,7 @@ from unittest.mock import Mock, patch
 from django.test import TestCase, override_settings
 from django.utils import timezone
 
-from assistant.agent.proposals import ToolInputError, decide, handle_callback, propose, summary, tool_definitions, validate_payload
+from assistant.agent.proposals import ToolInputError, decide, handle_callback, propose, send_cards, summary, tool_definitions, validate_payload
 from assistant.agent.tools import HANDLERS, ToolContext
 from assistant.agent.worker import claim_next_jobs, run_jobs
 from assistant.services.telegram_handlers import process_telegram_update
@@ -177,6 +177,46 @@ class ProposalTests(TestCase):
 INVENTORY = "Garage\r\nKitchen roll: 6 packs\r\nBin bags: 3 rolls\r\nBin bag ties: 1 pack"
 
 
+class NoteSearchTests(TestCase):
+    def setUp(self):
+        self.ctx = ToolContext(role="ike", speaker_name="Ike")
+        self.grocery = Note.objects.create(title="Weekly grocery list", category="Lists", body="Milk\nBananas")
+        self.freezer = Note.objects.create(title="Freezer foodstuff inventory", category="Lists", body="Beef: 2 packs")
+        self.danne = Note.objects.create(title="Bank details: Aunty Danne", category="Bank details", body="Bank: UBA")
+        self.insurance = Note.objects.create(title="Home insurance", category="Home", body="Paid from the bank by direct debit.")
+        self.untitled = Note.objects.create(body="Untitled scribble about milk")
+
+    def search(self, query):
+        return json.loads(HANDLERS["search_notes"](self.ctx, {"query": query}))
+
+    def test_each_word_matches_and_full_matches_rank_first(self):
+        found = self.search("grocery lists")["notes"]
+        self.assertEqual([n["id"] for n in found], [self.grocery.id, self.freezer.id])
+        self.assertNotIn("matched_words", found[0])
+        self.assertEqual(found[1]["matched_words"], "1 of 2")
+        found = self.search("the bank details for Danne")["notes"]
+        self.assertEqual([n["id"] for n in found], [self.danne.id, self.insurance.id])
+        self.assertEqual(found[1]["matched_words"], "1 of 3")
+        self.assertEqual({n["id"] for n in self.search("MILK")["notes"]}, {self.grocery.id, self.untitled.id})
+
+    def test_no_match_points_to_the_full_list(self):
+        result = self.search("passport renewal")
+        self.assertEqual(result["notes"], [])
+        self.assertIn("empty query", result["next"])
+
+    def test_empty_or_filler_query_lists_every_note_without_text(self):
+        for i in range(9):
+            Note.objects.create(title=f"Filler {i}", category="Work", body="text")
+        for query in ["", "  ", "the my"]:
+            with self.subTest(query=query):
+                result = self.search(query)
+                self.assertEqual(result["total"], 14)
+                self.assertTrue(all("body" not in n for n in result["notes"]))
+                categories = [n["category"] for n in result["notes"]]
+                self.assertEqual(categories[:4], ["Bank details", "Home", "Lists", "Lists"])
+                self.assertEqual(result["notes"][-1]["title"], "Untitled scribble about milk")
+
+
 @override_settings(**AGENT_SETTINGS, AGENT_PROPOSALS_ENABLED=True)
 class NoteEditTests(TestCase):
     def setUp(self):
@@ -297,6 +337,48 @@ class NoteEditTests(TestCase):
             p = self.make(edits=[self.edit("Kitchen roll: 6 packs", "Kitchen roll: 4 packs")])
         self.assertEqual(p.status, "pending")
         self.assertIn("6 packs", Note.objects.get().body)
+
+    def make_list(self):
+        self.note.category = "Lists"
+        self.note.save()
+
+    def test_one_line_edits_on_a_lists_note_save_without_confirm_or_card(self):
+        self.make_list()
+        p = self.make(edits=[self.edit("Kitchen roll: 6 packs", "Kitchen roll: 4 packs"),
+                             self.edit("Bin bag ties: 1 pack", "")], append="Milk\nBread")
+        self.assertEqual((p.status, p.result["outcome"]), ("confirmed", "done"))
+        self.assertEqual(Note.objects.get().body, "Garage\nKitchen roll: 4 packs\nBin bags: 3 rolls\nMilk\nBread")
+        self.assertEqual(AuditLog.objects.get(action="update_note").details["previous_body"], INVENTORY)
+        sent = len(self.bot.messages)
+        send_cards(self.thread, self.bot)
+        self.assertEqual(len(self.bot.messages), sent)
+
+    def test_lists_rewrites_renames_long_appends_and_other_notes_still_wait(self):
+        self.make_list()
+        for args in [
+            {"body": "Garage\nEmpty"},
+            {"append": "Milk", "new_title": "Shopping"},
+            {"edits": [self.edit("Kitchen roll: 6 packs\nBin bags: 3 rolls", "Kitchen roll: 4 packs")]},
+            {"append": "\n".join(f"Item {i}" for i in range(21))},
+        ]:
+            with self.subTest(args=args):
+                self.assertEqual(self.make(**args).status, "pending")
+        self.assertEqual(Note.objects.get(pk=self.note.pk).body, INVENTORY)
+        budget = Note.objects.create(title="Budget", category="Money", body="Food: £450")
+        result = propose(self.ctx, {"note_id": budget.id, "edits": [self.edit("Food: £450", "Food: £400")]}, kind="update_note")
+        self.assertEqual(result["status"], "pending")
+
+    def test_lists_edits_by_email_also_save_at_once(self):
+        self.make_list()
+        incoming = IncomingEmail.objects.create(
+            gmail_message_id="m2", outer_sender="ike@example.com", subject="Garage",
+            body_text="Bought WD-40", received_at=timezone.now(),
+        )
+        self.ctx.channel, self.ctx.incoming_email, self.ctx.newest_instruction = "email", incoming, "Bought WD-40"
+        with override_settings(AGENT_EMAIL_ENABLED=True):
+            p = self.make(append="WD-40: 1 can")
+        self.assertEqual(p.status, "confirmed")
+        self.assertTrue(Note.objects.get().body.endswith("WD-40: 1 can"))
 
     def test_tool_schema_lists_note_edit_fields(self):
         definition = next(d for d in tool_definitions() if d["name"] == "propose_update_note")
