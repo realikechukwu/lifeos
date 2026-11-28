@@ -15,7 +15,8 @@
      9. Sheets (dialogs)
     10. Calendar (FullCalendar theme)
     11. Review
-    12. Motion and accessibility
+    12. Ask (chat)
+    13. Motion and accessibility
    ========================================================================== */
 
 /* 1. Tokens ------------------------------------------------------------- */
@@ -963,7 +964,281 @@ dialog::backdrop { background: rgb(0 0 0 / 0.4); overflow: hidden; overscroll-be
 .prose { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 17px; line-height: 1.55; }
 .card { padding: 16px; border-radius: var(--r-lg); background: var(--surface); box-shadow: var(--shadow); }
 
-/* 12. Motion and accessibility ----------------------------------------------- */
+/* 12. Ask (chat) -------------------------------------------------------------- */
+
+body.is-ask { height: 100dvh; }
+body.is-ask .toasts {
+  left: 50%;
+  bottom: calc(138px + env(safe-area-inset-bottom, 0px));
+}
+
+.ask-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  background: var(--bg);
+}
+
+.ask-header {
+  flex-shrink: 0;
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) 44px;
+  align-items: center;
+  gap: 12px;
+  padding: max(10px, env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) 10px max(16px, env(safe-area-inset-left, 0px));
+  background: var(--surface);
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  backdrop-filter: saturate(180%) blur(20px);
+  border-bottom: 1px solid var(--sep);
+}
+.ask-header-title { text-align: center; min-width: 0; }
+.ask-header-title h1 { font-size: 17px; line-height: 21px; font-weight: 700; text-wrap: balance; }
+.ask-header-title p { font-size: 12px; line-height: 16px; color: var(--text-2); }
+.ask-new-form { display: contents; }
+
+.ask-messages {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column-reverse;
+  scroll-padding-bottom: 16px;
+  padding: 16px max(16px, env(safe-area-inset-right, 0px)) 16px max(16px, env(safe-area-inset-left, 0px));
+}
+.ask-messages-inner {
+  width: 100%;
+  max-width: 680px;
+  margin: 0 auto auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.ask-messages-inner:has(.ask-empty) { margin: auto; }
+
+.ask-turn { display: flex; flex-direction: column; gap: 10px; }
+.ask-turn-user { align-items: flex-end; }
+.ask-bubble {
+  max-width: min(82%, 520px);
+  padding: 10px 15px;
+  border-radius: 20px 20px 6px 20px;
+  background: var(--accent-fill);
+  color: var(--on-accent);
+  font-size: 17px;
+  line-height: 1.4;
+  overflow-wrap: break-word;
+}
+.ask-bubble-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+  font-size: 13px;
+  opacity: 0.9;
+}
+.ask-bubble-text { text-wrap: pretty; }
+
+.ask-reply {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 17px;
+  line-height: 1.5;
+  color: var(--text);
+  overflow-wrap: break-word;
+}
+.ask-reply p, .ask-reply li { text-wrap: pretty; }
+.ask-list { padding-left: 20px; display: flex; flex-direction: column; gap: 4px; }
+.ask-list li { list-style: disc; }
+
+.ask-typing {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 4px;
+}
+.ask-typing span {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ring);
+  opacity: 0.45;
+  animation: ask-dot 1.2s infinite ease-in-out;
+}
+.ask-typing span:nth-child(2) { animation-delay: 0.2s; }
+.ask-typing span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes ask-dot {
+  0%, 80%, 100% { opacity: 0.35; transform: translateY(0); }
+  40% { opacity: 1; transform: translateY(-3px); }
+}
+
+.ask-proposals { display: flex; flex-direction: column; gap: 10px; }
+.ask-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+.ask-card-head { display: flex; align-items: flex-start; gap: 12px; }
+.ask-card-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.ask-card-label { font-size: 13px; line-height: 17px; font-weight: 600; color: var(--text-2); }
+.ask-card-title { font-size: 17px; line-height: 22px; font-weight: 600; overflow-wrap: break-word; }
+.ask-card-when { font-size: 15px; line-height: 20px; color: var(--text-2); }
+.ask-card-cancel-form { display: contents; }
+.ask-card-cancel { margin: -8px -8px 0 0; color: var(--text-2); }
+.ask-card-details {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--sep);
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--text-2);
+  overflow-wrap: break-word;
+}
+.ask-card-actions form { display: contents; }
+.ask-card-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+.ask-card-status.is-ok { color: var(--ok); }
+.ask-card-status.is-failed { color: var(--danger); }
+
+.ask-docs .row > .icon:last-child { color: var(--accent); }
+
+.ask-error-body { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
+
+.ask-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 20px 8px;
+  text-align: center;
+}
+.ask-empty-badge {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--accent-fill);
+  color: var(--on-accent);
+  box-shadow: 0 6px 16px rgb(88 71 230 / 0.3);
+}
+.ask-empty-title { font-size: 26px; line-height: 32px; font-weight: 700; text-wrap: balance; color: var(--text); }
+.ask-empty-sub { max-width: 34ch; font-size: 15px; line-height: 1.45; color: var(--text-2); text-wrap: pretty; }
+.ask-starters {
+  width: 100%;
+  max-width: 460px;
+  margin-top: 8px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 8px;
+}
+.ask-starters form { display: contents; }
+.ask-starter {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 14px;
+  justify-content: flex-start;
+  text-align: left;
+  white-space: normal;
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--sep);
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.ask-composer {
+  flex-shrink: 0;
+  border-top: 1px solid var(--sep);
+  background: var(--surface);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  backdrop-filter: saturate(180%) blur(20px);
+  padding: 8px max(12px, env(safe-area-inset-right, 0px)) max(10px, env(safe-area-inset-bottom, 0px)) max(12px, env(safe-area-inset-left, 0px));
+}
+.ask-composer-inner {
+  width: 100%;
+  max-width: 680px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ask-chips { margin: 0 -12px; padding: 2px 12px; }
+.ask-chips .chip { min-height: 44px; }
+
+.ask-file-pill {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 6px;
+  max-width: 100%;
+  padding: 0 4px 0 12px;
+  border-radius: var(--r-pill);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 500;
+}
+.ask-file-pill-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ask-file-clear {
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: inherit;
+}
+
+.ask-form { display: flex; align-items: flex-end; gap: 8px; }
+.ask-attach-wrap { position: relative; flex-shrink: 0; }
+.ask-attach { cursor: pointer; }
+.ask-attach-wrap:focus-within .ask-attach { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.ask-input {
+  flex: 1;
+  min-width: 0;
+  min-height: 44px;
+  max-height: 132px;
+  padding: 10px 16px;
+  border: 1px solid var(--sep);
+  border-radius: 22px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 17px;
+  line-height: 1.35;
+  resize: none;
+  overflow-y: auto;
+}
+.ask-input::placeholder { color: var(--text-2); }
+.ask-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.ask-send { background: var(--accent-fill); color: var(--on-accent); }
+
+/* 13. Motion and accessibility ----------------------------------------------- */
 
 @media (prefers-reduced-motion: no-preference) {
   @view-transition { navigation: auto; }

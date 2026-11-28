@@ -7,6 +7,9 @@
   <div>
     <h1 class="page-title">Tasks</h1>
   </div>
+  {% if ask_available %}
+  <button type="button" class="icon-btn" data-open-dialog="quickAdd" aria-haspopup="dialog" aria-label="New task or note">{% icon "plus" 20 %}</button>
+  {% endif %}
 </header>
 
 <div class="toolbar">

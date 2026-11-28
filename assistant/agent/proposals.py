@@ -377,6 +377,9 @@ def propose(ctx, args, *, kind):
     if ctx.channel == "email":
         if not settings.AGENT_EMAIL_ENABLED or not ctx.incoming_email or not ctx.newest_instruction.strip():
             raise ToolInputError("Email changes require the authorised sender's own new instruction.")
+    elif ctx.channel == "web":
+        if not settings.AGENT_WEB_CHAT_ENABLED or ctx.web_user is None:
+            raise ToolInputError("Web changes require an enabled web chat.")
     elif ctx.telegram_user is None or ctx.telegram_chat is None:
         raise ToolInputError("Proposals require a Telegram conversation.")
     raw = dict(args)
@@ -422,9 +425,10 @@ def _execute(proposal):
     validate_payload(kind, {k: v for k, v in p.items() if k in allowed})
     if kind in CREATE_TYPES:
         from assistant.services.telegram_handlers import _authorised_email_for_role
+        source = IncomingEmail.Source.WEB if proposal.thread.channel == "web" else IncomingEmail.Source.TELEGRAM
         incoming, _ = IncomingEmail.objects.get_or_create(
             gmail_message_id=f"agent-proposal:{proposal.id}", defaults={
-                "source": IncomingEmail.Source.TELEGRAM,
+                "source": source,
                 "outer_sender": _authorised_email_for_role(proposal.role),
                 "subject": p.get("title", "Agent proposal"), "body_text": summary(proposal),
                 "received_at": timezone.now(),

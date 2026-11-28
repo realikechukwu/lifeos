@@ -46,6 +46,7 @@ class ToolContext:
     thread: AgentThread | None = None
     job: AgentJob | None = None
     channel: str = "telegram"
+    web_user: object | None = None
     incoming_email: IncomingEmail | None = None
     newest_instruction: str = ""
     gmail_service: object | None = None

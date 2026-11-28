@@ -67,9 +67,19 @@ def claim_next_jobs() -> list[AgentJob]:
                 id__gt=first.id,
             ).values_list("id", flat=True)
         )
+    elif first.thread_id is None and first.channel == "web" and first.web_user_id:
+        siblings = list(
+            AgentJob.objects.filter(
+                status=AgentJob.Status.QUEUED,
+                thread__isnull=True,
+                channel=first.channel,
+                web_user_id=first.web_user_id,
+                id__gt=first.id,
+            ).values_list("id", flat=True)
+        )
     claimed = [first.id] + _claim(siblings)
     return list(AgentJob.objects.filter(id__in=claimed).select_related(
-        "telegram_chat", "telegram_user", "thread", "incoming_email"
+        "telegram_chat", "telegram_user", "web_user", "thread", "incoming_email"
     ).order_by("id"))
 
 
@@ -95,6 +105,9 @@ def run_jobs(jobs: list[AgentJob], *, bot=None, client=None, gmail_service=None)
         elif jobs[0].channel == "email":
             from .email import process_email_job
             process_email_job(jobs[0], client=client, gmail_service=gmail_service)
+        elif jobs[0].channel == "web":
+            from .web import process_web_jobs
+            process_web_jobs(jobs, client=client)
         else:
             process_telegram_jobs(jobs, bot=bot, client=client)
     except Exception as exc:  # noqa: BLE001 - one bad job must not stop the worker
@@ -120,6 +133,9 @@ def run_jobs(jobs: list[AgentJob], *, bot=None, client=None, gmail_service=None)
                 notify_email_failure(jobs[0], gmail_service=gmail_service)
             except Exception:
                 logger.exception("Failed to notify email job %s", jobs[0].id)
+        elif jobs[0].channel == "web":
+            # Web chat renders failed jobs inline with a Retry button; never message Telegram.
+            pass
         elif jobs[0].briefing_type:
             from .briefings import send_template_briefing
             try:

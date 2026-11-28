@@ -1,0 +1,11 @@
+{% load ui %}
+<div class="ask-turn ask-turn-user">
+  <div class="ask-bubble">
+    {% if attachment %}
+    <p class="ask-bubble-file">{% icon "paperclip" 14 %} {{ attachment }}</p>
+    {% endif %}
+    {% if user_text %}
+    <p class="ask-bubble-text">{{ user_text|linebreaksbr }}</p>
+    {% endif %}
+  </div>
+</div>

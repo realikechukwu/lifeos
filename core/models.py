@@ -66,6 +66,7 @@ class IncomingEmail(models.Model):
     class Source(models.TextChoices):
         EMAIL = "email", "Email"
         TELEGRAM = "telegram", "Telegram"
+        WEB = "web", "Web"
 
     class Status(models.TextChoices):
         RECEIVED = "received", "Received"
@@ -696,6 +697,26 @@ class GoogleCredential(models.Model):
         return json.loads(raw.decode("utf-8"))
 
 
+class WebAccount(models.Model):
+    """Links a Django web login to a household adult role for Ask chat."""
+
+    class Role(models.TextChoices):
+        IKE = HouseholdMember.Role.IKE, "Ike"
+        WIFE = HouseholdMember.Role.WIFE, "Wife"
+
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="web_account")
+    role = models.CharField(max_length=20, choices=Role.choices)
+    display_name = models.CharField(max_length=255, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["role", "user_id"]
+
+    def __str__(self):
+        return f"{self.user.get_username()} ({self.get_role_display()})"
+
+
 class AgentThread(models.Model):
     """One running conversation between a household member and the Claude agent.
 
@@ -707,12 +728,13 @@ class AgentThread(models.Model):
     class Channel(models.TextChoices):
         TELEGRAM = "telegram", "Telegram"
         EMAIL = "email", "Email"
+        WEB = "web", "Web"
 
     channel = models.CharField(max_length=20, choices=Channel.choices)
     role = models.CharField(max_length=20, choices=HouseholdMember.Role.choices)
     email_thread_id = models.CharField(max_length=64, unique=True, null=True, blank=True)
     # The system prompt + tools + model fingerprint the history was written
-    # under; a Telegram thread with an older version is closed, not replayed.
+    # under; a Telegram or web thread with an older version is closed, not replayed.
     prompt_version = models.CharField(max_length=16, blank=True, default="")
     telegram_chat = models.ForeignKey(
         TelegramChat, on_delete=models.CASCADE, null=True, blank=True, related_name="agent_threads"
@@ -720,13 +742,19 @@ class AgentThread(models.Model):
     telegram_user = models.ForeignKey(
         TelegramUser, on_delete=models.CASCADE, null=True, blank=True, related_name="agent_threads"
     )
+    web_user = models.ForeignKey(
+        User, on_delete=models.CASCADE, null=True, blank=True, related_name="agent_threads"
+    )
     last_activity_at = models.DateTimeField()
     closed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ["-last_activity_at"]
-        indexes = [models.Index(fields=["channel", "telegram_chat", "telegram_user", "closed_at"])]
+        indexes = [
+            models.Index(fields=["channel", "telegram_chat", "telegram_user", "closed_at"]),
+            models.Index(fields=["channel", "web_user", "closed_at"]),
+        ]
 
     def __str__(self):
         return f"Agent thread {self.id} ({self.channel}, {self.role})"
@@ -787,6 +815,9 @@ class AgentJob(models.Model):
     )
     telegram_user = models.ForeignKey(
         TelegramUser, on_delete=models.CASCADE, null=True, blank=True, related_name="agent_jobs"
+    )
+    web_user = models.ForeignKey(
+        User, on_delete=models.CASCADE, null=True, blank=True, related_name="agent_jobs"
     )
     telegram_update_id = models.BigIntegerField(null=True, blank=True, unique=True)
     telegram_message_id = models.BigIntegerField(null=True, blank=True)

@@ -1,0 +1,15 @@
+<div class="ask-proposals" id="{{ group_id }}" data-proposal-group>
+  {% for card in cards %}
+    {% include "web/_ask_proposal_card.html" with card=card %}
+  {% endfor %}
+  {% if pending_ids|length > 1 %}
+  <form method="post" action="{% url 'web:ask_proposals_confirm_all' %}" data-swap="#{{ group_id }}" data-add-all-form>
+    {% csrf_token %}
+    <input type="hidden" name="group_id" value="{{ group_id }}">
+    {% for pid in pending_ids %}
+    <input type="hidden" name="proposal_id" value="{{ pid }}">
+    {% endfor %}
+    <button type="submit" class="btn btn-primary btn-block">Add all</button>
+  </form>
+  {% endif %}
+</div>

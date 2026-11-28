@@ -47,12 +47,13 @@
   <script src="{% static 'js/app.js' %}" defer></script>
   {% block extra_head %}{% endblock %}
 </head>
-<body>
+<body{% block body_class %}{% endblock %}>
 {% include "web/_icons.html" %}
 <a class="skip-link" href="#main">Skip to content</a>
 
 {% if user.is_authenticated and request.resolver_match.url_name != "login" %}
 {% with url_name=request.resolver_match.url_name %}
+{% block app_shell %}
 <div class="app">
   <nav class="sidebar" aria-label="Primary">
     <a class="side-brand" href="{% url 'web:upcoming' %}">
@@ -61,6 +62,9 @@
     </a>
     <a class="side-link" href="{% url 'web:upcoming' %}" {% if url_name == 'upcoming' %}aria-current="page"{% endif %}>{% icon "home" %} Today</a>
     <a class="side-link" href="{% url 'web:calendar' %}" {% if url_name == 'calendar' %}aria-current="page"{% endif %}>{% icon "calendar" %} Calendar</a>
+    {% if ask_available %}
+    <a class="side-link" href="{% url 'web:ask' %}" {% if url_name == 'ask' %}aria-current="page"{% endif %}>{% icon "chat" %} Ask</a>
+    {% endif %}
     <a class="side-link" href="{% url 'web:task_list' %}" {% if 'task' in url_name %}aria-current="page"{% endif %}>{% icon "tasks" %} Tasks</a>
     <a class="side-link" href="{% url 'web:note_list' %}" {% if 'note' in url_name %}aria-current="page"{% endif %}>{% icon "note" %} Notes</a>
     <a class="side-link" href="{% url 'web:review_list' %}" {% if 'review' in url_name %}aria-current="page"{% endif %}>
@@ -90,13 +94,21 @@
     Today{% if pending_review_count %}<span class="visually-hidden">, {{ pending_review_count }} waiting for review</span>{% endif %}
   </a>
   <a class="tab" href="{% url 'web:calendar' %}" {% if url_name == 'calendar' %}aria-current="page"{% endif %}>{% icon "calendar" 24 %} Calendar</a>
+  {% if ask_available %}
+  <a class="tab tab-center" href="{% url 'web:ask' %}">
+    <span class="tab-bubble">{% icon "chat" 26 %}</span>
+    Ask
+  </a>
+  {% else %}
   <button type="button" class="tab tab-center" data-open-dialog="quickAdd" aria-haspopup="dialog">
     <span class="tab-bubble">{% icon "plus" 26 %}</span>
     New
   </button>
+  {% endif %}
   <a class="tab" href="{% url 'web:task_list' %}" {% if 'task' in url_name %}aria-current="page"{% endif %}>{% icon "tasks" 24 %} Tasks</a>
   <a class="tab" href="{% url 'web:note_list' %}" {% if 'note' in url_name %}aria-current="page"{% endif %}>{% icon "note" 24 %} Notes</a>
 </nav>
+{% endblock %}
 
 <dialog class="sheet" id="quickAdd" aria-labelledby="quickAddTitle">
   <div class="sheet-head">

@@ -3,7 +3,7 @@ from urllib.parse import urljoin
 from django.conf import settings
 from django.templatetags.static import static
 
-from core.models import ParsedAction
+from core.models import ParsedAction, WebAccount
 
 
 def pending_review_count(request):
@@ -17,6 +17,16 @@ def pending_review_count(request):
             status=ParsedAction.Status.PENDING_REVIEW
         ).count()
     }
+
+
+def ask_navigation(request):
+    """Whether the Ask chat screen is enabled and set up for this login."""
+    if not settings.AGENT_WEB_CHAT_ENABLED or not settings.AGENT_ENABLED:
+        return {"ask_available": False}
+    user = getattr(request, "user", None)
+    if not user or not user.is_authenticated:
+        return {"ask_available": False}
+    return {"ask_available": WebAccount.objects.filter(user=user).exists()}
 
 
 def site_metadata(request):

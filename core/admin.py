@@ -29,6 +29,7 @@ from .models import (
     TelegramConversation,
     TelegramUpdate,
     TelegramUser,
+    WebAccount,
 )
 
 STALE_PROCESSING_MINUTES = 15
@@ -560,10 +561,18 @@ class AgentMessageInline(admin.TabularInline):
     readonly_fields = fields
 
 
+@admin.register(WebAccount)
+class WebAccountAdmin(admin.ModelAdmin):
+    list_display = ("user", "role", "display_name", "updated_at")
+    list_filter = ("role",)
+    search_fields = ("user__username", "user__first_name", "display_name")
+    readonly_fields = ("created_at", "updated_at")
+
+
 @admin.register(AgentThread)
 class AgentThreadAdmin(admin.ModelAdmin):
     # History must stay exactly as the model saw it, so threads are read-only.
-    list_display = ("id", "channel", "role", "telegram_chat", "last_activity_at", "closed_at")
+    list_display = ("id", "channel", "role", "telegram_chat", "web_user", "last_activity_at", "closed_at")
     list_filter = ("channel", "role")
     readonly_fields = [f.name for f in AgentThread._meta.fields]
     inlines = [AgentMessageInline]
@@ -574,7 +583,7 @@ class AgentThreadAdmin(admin.ModelAdmin):
 
 @admin.register(AgentJob)
 class AgentJobAdmin(admin.ModelAdmin):
-    list_display = ("id", "channel", "status", "telegram_user", "attempts", "created_at", "finished_at")
+    list_display = ("id", "channel", "status", "telegram_user", "web_user", "attempts", "created_at", "finished_at")
     list_filter = ("status", "channel")
     readonly_fields = [f.name for f in AgentJob._meta.fields]
 

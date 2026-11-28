@@ -77,6 +77,7 @@ TEMPLATES = [
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
                 "web.context_processors.pending_review_count",
+                "web.context_processors.ask_navigation",
                 "web.context_processors.site_metadata",
             ],
         },
@@ -228,6 +229,8 @@ AGENT_DOCUMENTS_ENABLED = _bool_env("AGENT_DOCUMENTS_ENABLED", False)
 AGENT_PHOTOS_ENABLED = _bool_env("AGENT_PHOTOS_ENABLED", False)
 # Server tools are selected once at worker startup; restart to change this.
 AGENT_WEB_ENABLED = _bool_env("AGENT_WEB_ENABLED", False)
+# Web chat screen ("Ask") inside the LifeOS web app.
+AGENT_WEB_CHAT_ENABLED = _bool_env("AGENT_WEB_CHAT_ENABLED", False)
 # Read-only access to each person's own Gmail (signed in with
 # `google_auth --account <address> --readonly`). Never used for sending.
 AGENT_PERSONAL_INBOX_ENABLED = _bool_env("AGENT_PERSONAL_INBOX_ENABLED", False)
