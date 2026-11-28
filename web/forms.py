@@ -5,10 +5,10 @@ call OpenAI or re-run any extraction/gating logic."""
 
 from django import forms
 
-from core.models import HouseholdMember, Note, ParsedAction, Task
+from core.models import AssignedTo, HouseholdMember, Note, ParsedAction, Task
 
-DATE_ATTRS = {"type": "date", "class": "form-control"}
-TIME_ATTRS = {"type": "time", "class": "form-control"}
+DATE_ATTRS = {"type": "date", "class": "input"}
+TIME_ATTRS = {"type": "time", "class": "input"}
 
 
 class TaskForm(forms.ModelForm):
@@ -16,14 +16,21 @@ class TaskForm(forms.ModelForm):
         model = Task
         fields = ["title", "description", "assigned_to", "status", "priority", "due_date", "due_time"]
         widgets = {
-            "title": forms.TextInput(attrs={"class": "form-control"}),
-            "description": forms.Textarea(attrs={"class": "form-control", "rows": 3}),
-            "assigned_to": forms.Select(attrs={"class": "form-select"}),
-            "status": forms.Select(attrs={"class": "form-select"}),
-            "priority": forms.Select(attrs={"class": "form-select"}),
-            "due_date": forms.DateInput(attrs=DATE_ATTRS),
-            "due_time": forms.TimeInput(attrs=TIME_ATTRS),
+            "title": forms.TextInput(attrs={"class": "input title-input", "placeholder": "What needs doing?"}),
+            "description": forms.Textarea(attrs={"class": "input", "rows": 3, "placeholder": "Notes"}),
+            "assigned_to": forms.Select(attrs={"class": "input"}),
+            "status": forms.Select(attrs={"class": "input"}),
+            "priority": forms.Select(attrs={"class": "input"}),
+            "due_date": forms.DateInput(attrs=DATE_ATTRS, format="%Y-%m-%d"),
+            "due_time": forms.TimeInput(attrs=TIME_ATTRS, format="%H:%M"),
         }
+        labels = {"description": "Notes", "assigned_to": "Who", "due_date": "Due date", "due_time": "Time"}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # A new task always starts open; status only matters once it exists.
+        if not self.instance.pk:
+            del self.fields["status"]
 
     def clean_title(self):
         title = (self.cleaned_data.get("title") or "").strip()
@@ -32,16 +39,39 @@ class TaskForm(forms.ModelForm):
         return title
 
 
+class QuickTaskForm(forms.ModelForm):
+    """The one-line "add a task" box: a title, and optionally a due date and
+    who it's for. Everything else takes the model defaults."""
+
+    class Meta:
+        model = Task
+        fields = ["title", "due_date", "assigned_to"]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["assigned_to"].required = False
+
+    def clean_title(self):
+        title = (self.cleaned_data.get("title") or "").strip()
+        if not title:
+            raise forms.ValidationError("Title is required.")
+        return title
+
+    def clean_assigned_to(self):
+        return self.cleaned_data.get("assigned_to") or AssignedTo.UNASSIGNED
+
+
 class NoteForm(forms.ModelForm):
     class Meta:
         model = Note
         fields = ["title", "body", "category", "related_household_member"]
         widgets = {
-            "title": forms.TextInput(attrs={"class": "form-control"}),
-            "body": forms.Textarea(attrs={"class": "form-control", "rows": 6}),
-            "category": forms.TextInput(attrs={"class": "form-control"}),
-            "related_household_member": forms.Select(attrs={"class": "form-select"}),
+            "title": forms.TextInput(attrs={"class": "input title-input", "placeholder": "Title"}),
+            "body": forms.Textarea(attrs={"class": "input", "rows": 10, "placeholder": "Write anything…"}),
+            "category": forms.TextInput(attrs={"class": "input", "placeholder": "e.g. Lists, Home, Health", "list": "note-categories"}),
+            "related_household_member": forms.Select(attrs={"class": "input"}),
         }
+        labels = {"related_household_member": "About"}
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -73,26 +103,26 @@ class ParsedActionReviewForm(forms.ModelForm):
             "related_household_member",
         ]
         widgets = {
-            "title": forms.TextInput(attrs={"class": "form-control"}),
-            "description": forms.Textarea(attrs={"class": "form-control", "rows": 3}),
+            "title": forms.TextInput(attrs={"class": "input"}),
+            "description": forms.Textarea(attrs={"class": "input", "rows": 3}),
             "appointment_date": forms.DateInput(attrs=DATE_ATTRS),
             "start_time": forms.TimeInput(attrs=TIME_ATTRS),
             "end_time": forms.TimeInput(attrs=TIME_ATTRS),
-            "all_day": forms.CheckboxInput(attrs={"class": "form-check-input"}),
-            "location": forms.TextInput(attrs={"class": "form-control"}),
-            "meeting_url": forms.URLInput(attrs={"class": "form-control"}),
-            "organiser": forms.TextInput(attrs={"class": "form-control"}),
-            "booking_reference": forms.TextInput(attrs={"class": "form-control"}),
+            "all_day": forms.CheckboxInput(attrs={"class": "check"}),
+            "location": forms.TextInput(attrs={"class": "input"}),
+            "meeting_url": forms.URLInput(attrs={"class": "input"}),
+            "organiser": forms.TextInput(attrs={"class": "input"}),
+            "booking_reference": forms.TextInput(attrs={"class": "input"}),
             "due_date": forms.DateInput(attrs=DATE_ATTRS),
             "due_time": forms.TimeInput(attrs=TIME_ATTRS),
-            "assigned_to": forms.Select(attrs={"class": "form-select"}),
-            "task_search_text": forms.TextInput(attrs={"class": "form-control"}),
-            "note_category": forms.TextInput(attrs={"class": "form-control"}),
+            "assigned_to": forms.Select(attrs={"class": "input"}),
+            "task_search_text": forms.TextInput(attrs={"class": "input"}),
+            "note_category": forms.TextInput(attrs={"class": "input"}),
             "reminder_date": forms.DateInput(attrs=DATE_ATTRS),
             "reminder_time": forms.TimeInput(attrs=TIME_ATTRS),
-            "reminder_recipient": forms.Select(attrs={"class": "form-select"}),
-            "reminder_lead_days": forms.NumberInput(attrs={"class": "form-control"}),
-            "related_household_member": forms.Select(attrs={"class": "form-select"}),
+            "reminder_recipient": forms.Select(attrs={"class": "input"}),
+            "reminder_lead_days": forms.NumberInput(attrs={"class": "input"}),
+            "related_household_member": forms.Select(attrs={"class": "input"}),
         }
 
 

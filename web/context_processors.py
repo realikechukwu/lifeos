@@ -32,6 +32,6 @@ def site_metadata(request):
     return {
         "canonical_url": f"{base_url}{request.path}",
         "social_image_url": urljoin(
-            f"{base_url}/", static("images/og-family-assistant.jpg")
+            f"{base_url}/", static("images/og-lifeos.jpg")
         ),
     }

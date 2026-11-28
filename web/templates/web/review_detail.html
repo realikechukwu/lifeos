@@ -1,138 +1,89 @@
 {% extends "base.html" %}
-{% block title %}Review action — Family Assistant{% endblock %}
+{% load ui %}
+{% block title %}Review action — LifeOS{% endblock %}
 
 {% block content %}
-<a href="{% url 'web:review_list' %}" class="back-link mb-3">
-  <i class="bi bi-arrow-left"></i> Review queue
-</a>
+<a href="{% url 'web:review_list' %}" class="back-link">{% icon "chevron-left" 22 %} Review</a>
 
-<div class="page-head">
+<header class="page-head">
   <div>
+    <p class="overline">{{ action.get_status_display }}</p>
     <h1 class="page-title">{{ action.get_action_type_display }}</h1>
-    <p class="page-sub">Check the extracted details, correct anything wrong, then approve or reject.</p>
+    <p class="page-sub">Check what LifeOS read, fix anything wrong, then approve or reject.</p>
   </div>
-  <span class="chip chip-warn">{{ action.get_status_display }}</span>
-</div>
+</header>
 
-<div class="card mb-3">
-  <div class="card-header"><i class="bi bi-envelope me-1"></i> Source email</div>
-  <div class="card-body">
-    <div class="kv">
-      <div class="kv-row">
-        <div class="kv-key">Subject</div>
-        <div class="kv-val">{{ action.incoming_email.subject|default:"(no subject)" }}</div>
-      </div>
-      <div class="kv-row">
-        <div class="kv-key">Sender</div>
-        <div class="kv-val">{{ action.incoming_email.outer_sender }}</div>
-      </div>
-      <div class="kv-row">
-        <div class="kv-key">Received</div>
-        <div class="kv-val">{{ action.incoming_email.received_at|date:"d M Y, H:i"|default:"—" }}</div>
-      </div>
-      <div class="kv-row">
-        <div class="kv-key">Confidence</div>
-        <div class="kv-val">
-          <span class="confidence">
-            <span class="confidence-bar">
-              <span class="confidence-fill" style="width: {% widthratio action.confidence 1 100 %}%"></span>
-            </span>
-            {{ action.confidence|floatformat:2 }}
-          </span>
-        </div>
-      </div>
+<section class="section" aria-labelledby="source-heading">
+  <div class="section-head"><h2 class="section-title" id="source-heading">Source email</h2></div>
+  <div class="kv">
+    <div class="kv-row"><span class="kv-key">Subject</span><span class="kv-val">{{ action.incoming_email.subject|default:"(no subject)" }}</span></div>
+    <div class="kv-row"><span class="kv-key">From</span><span class="kv-val">{{ action.incoming_email.outer_sender }}</span></div>
+    <div class="kv-row"><span class="kv-key">Received</span><span class="kv-val">{{ action.incoming_email.received_at|date:"j M Y, H:i"|default:"—" }}</span></div>
+    <div class="kv-row">
+      <span class="kv-key">Confidence</span>
+      <span class="kv-val meter">
+        <span class="meter-track"><span class="meter-fill" style="width: {% widthratio action.confidence 1 100 %}%"></span></span>
+        {{ action.confidence|floatformat:2 }}
+      </span>
     </div>
-
-    {% if action.incoming_email.has_attachments %}
-      <div class="alert alert-warning mt-3 mb-0 d-flex align-items-start gap-2">
-        <i class="bi bi-paperclip mt-1"></i>
-        <div>
-          This email has attachments, and their contents are not parsed. If the details might be
-          inside an attachment, open the original in Django admin before approving.
-        </div>
-      </div>
-    {% endif %}
   </div>
-</div>
+  {% if action.incoming_email.has_attachments %}
+    <div class="notice">{% icon "paperclip" %}<div>This email has attachments, and LifeOS doesn’t read them here. If the details might be in an attachment, open the original in Admin before approving.</div></div>
+  {% endif %}
+</section>
 
 {% if action.missing_fields %}
-  <div class="alert alert-warning d-flex align-items-start gap-2">
-    <i class="bi bi-exclamation-triangle-fill mt-1"></i>
-    <div><strong>Missing fields:</strong> {{ action.missing_fields|join:", " }}</div>
-  </div>
+  <div class="notice" role="note">{% icon "alert" %}<div><strong>Missing:</strong> {{ action.missing_fields|join:", " }}</div></div>
 {% endif %}
 
 {% if action.ambiguity_notes %}
-  <div class="alert alert-warning d-flex align-items-start gap-2">
-    <i class="bi bi-question-circle-fill mt-1"></i>
+  <div class="notice" role="note">
+    {% icon "alert" %}
     <div>
-      <strong>Ambiguity notes</strong>
-      <ul class="mb-0 mt-1 ps-3">
-        {% for note in action.ambiguity_notes %}<li>{{ note }}</li>{% endfor %}
-      </ul>
+      <strong>Unclear</strong>
+      <ul>{% for note in action.ambiguity_notes %}<li>{{ note }}</li>{% endfor %}</ul>
     </div>
   </div>
 {% endif %}
 
 {% if action.evidence %}
-  <div class="card mb-3">
-    <div class="card-header"><i class="bi bi-search me-1"></i> Supporting evidence</div>
-    <ul class="list-group list-group-flush">
-      {% for item in action.evidence %}
-        <li class="list-group-item small">{{ item }}</li>
-      {% endfor %}
-    </ul>
-  </div>
+  <section class="section" aria-labelledby="evidence-heading">
+    <div class="section-head"><h2 class="section-title" id="evidence-heading">Why LifeOS thinks so</h2></div>
+    <ul class="card evidence">{% for item in action.evidence %}<li>{{ item }}</li>{% endfor %}</ul>
+  </section>
 {% endif %}
 
-<div class="card mb-3">
-  <div class="card-header"><i class="bi bi-pencil-square me-1"></i> Extracted fields — editable</div>
-  <div class="card-body">
-    <form method="post" id="reviewForm" novalidate>
-      {% csrf_token %}
+<section class="section" aria-labelledby="fields-heading">
+  <div class="section-head"><h2 class="section-title" id="fields-heading">Details</h2></div>
+  <form method="post" id="reviewForm" class="form" novalidate>
+    {% csrf_token %}
 
-      {% if form.non_field_errors %}
-        <div class="alert alert-danger">{{ form.non_field_errors|join:", " }}</div>
+    {% if form.non_field_errors %}
+      <div class="notice danger" role="alert">{% icon "alert" %}<div>{{ form.non_field_errors|join:" " }}</div></div>
+    {% endif %}
+
+    <div class="form-group form-grid">
+      {% for field in form %}
+        {% include "web/_field.html" %}
+      {% endfor %}
+    </div>
+
+    <div class="stack">
+      {% if action.status != "executed" %}
+        <button type="submit" name="intent" value="approve" class="btn btn-primary btn-lg btn-block">{% icon "check" 18 %} Approve</button>
       {% endif %}
-
-      <div class="row">
-        {% for field in form %}
-          <div class="col-12 col-md-6">
-            <div class="field">
-              <label class="form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
-              {{ field }}
-              {% if field.errors %}<div class="field-error">{{ field.errors|join:", " }}</div>{% endif %}
-              {% if field.help_text %}<div class="form-text">{{ field.help_text }}</div>{% endif %}
-            </div>
-          </div>
-        {% endfor %}
-      </div>
-
-      <div class="form-actions is-sticky flex-wrap">
+      <div class="btn-row">
+        <button type="submit" name="intent" value="save" class="btn">Save changes</button>
         {% if action.status != "executed" %}
-          <button type="submit" name="intent" value="approve" class="btn btn-success">
-            <i class="bi bi-check2-circle me-1"></i> Approve
-          </button>
-        {% endif %}
-        <button type="submit" name="intent" value="save" class="btn btn-outline-secondary">
-          Save changes
-        </button>
-        {% if action.status != "executed" %}
-          <button type="submit" name="intent" value="reject" class="btn btn-outline-danger"
-                  onclick="return confirm('Reject this action? This cannot be undone.');">
-            Reject
-          </button>
+          <button type="submit" name="intent" value="reject" class="btn btn-danger"
+                  onclick="return confirm('Reject this? It can’t be undone.');">Reject</button>
         {% endif %}
       </div>
-    </form>
-  </div>
-</div>
+    </div>
+  </form>
+</section>
 
-<div class="d-flex flex-wrap gap-2">
-  <a href="{% url 'admin:core_parsedaction_change' action.id %}" class="btn btn-outline-secondary btn-sm"
-     target="_blank" rel="noopener">
-    <i class="bi bi-box-arrow-up-right"></i> Open in Django admin
-  </a>
-  <a href="{% url 'web:review_list' %}" class="btn btn-link btn-sm">Back to review list</a>
-</div>
+<a href="{% url 'admin:core_parsedaction_change' action.id %}" class="btn btn-plain" target="_blank" rel="noopener">
+  {% icon "external" 18 %} Open in Admin <span class="visually-hidden">(opens in a new tab)</span>
+</a>
 {% endblock %}

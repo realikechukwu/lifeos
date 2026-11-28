@@ -1,0 +1,40 @@
+{% load ui %}<div class="stack" id="note-results">
+  {% if categories %}
+  <nav class="chips" aria-label="Filter notes by category">
+    <a class="chip" href="?{% if current_q %}q={{ current_q|urlencode }}{% endif %}" {% if not current_category %}aria-current="true"{% endif %}>All</a>
+    {% for cat in categories %}
+      <a class="chip" href="?category={{ cat|urlencode }}{% if current_q %}&amp;q={{ current_q|urlencode }}{% endif %}" {% if cat == current_category %}aria-current="true"{% endif %}>{{ cat }}</a>
+    {% endfor %}
+  </nav>
+  {% endif %}
+
+  {% if notes %}
+    <ul class="group">
+      {% for note in notes %}
+        <li>
+          <a class="row" href="{% url 'web:note_detail' note.id %}">
+            <span class="tile-icon{% if note.category == 'Lists' %} teal{% endif %}">{% if note.category == "Lists" %}{% icon "tasks" %}{% else %}{% icon "note" %}{% endif %}</span>
+            <span class="row-main">
+              <span class="row-title strong">{{ note.title|default:"Untitled note" }}</span>
+              {% if note.body %}<span class="row-preview">{{ note.body|line_preview }}</span>{% endif %}
+              <span class="row-sub">{{ note.updated_at|date:"j M" }}{% if note.category %} · {{ note.category }}{% endif %}{% if note.source_email %} · From email{% endif %}</span>
+            </span>
+            {% icon "chevron-right" 18 %}
+          </a>
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <div class="empty">
+      {% icon "note" %}
+      {% if current_q %}
+        <p class="empty-title">No notes match “{{ current_q }}”</p>
+        <p>Try another word, or clear the search.</p>
+      {% else %}
+        <p class="empty-title">No notes yet</p>
+        <p>Jot something down, or ask LifeOS to start a list.</p>
+        <a href="{% url 'web:note_create' %}" class="btn btn-tinted">{% icon "pencil" 18 %} New note</a>
+      {% endif %}
+    </div>
+  {% endif %}
+</div>

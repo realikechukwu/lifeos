@@ -1,0 +1,14 @@
+{% load ui %}
+<button type="button" class="btn btn-danger btn-block" data-open-dialog="deleteNote" command="show-modal" commandfor="deleteNote" aria-haspopup="dialog">{% icon "trash" 18 %} Delete note</button>
+
+<dialog class="sheet" id="deleteNote" aria-labelledby="deleteNoteTitle" aria-describedby="deleteNoteText">
+  <div class="sheet-body">
+    <h2 class="section-title" id="deleteNoteTitle">Delete this note?</h2>
+    <p class="muted" id="deleteNoteText">“{{ note }}” will disappear for both of you. You can’t undo this here.</p>
+    <form method="post" action="{% url 'web:note_delete' note.id %}" class="stack">
+      {% csrf_token %}
+      <button type="submit" class="btn btn-danger btn-lg btn-block">Delete note</button>
+      <button type="button" class="btn btn-lg btn-block" data-close-dialog command="close" commandfor="deleteNote" autofocus>Keep it</button>
+    </form>
+  </div>
+</dialog>

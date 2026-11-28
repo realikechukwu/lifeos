@@ -1,4 +1,4 @@
-/* global FullCalendar, bootstrap */
+/* global FullCalendar */
 (function () {
   "use strict";
   document.addEventListener("DOMContentLoaded", function () {
@@ -7,7 +7,8 @@
     var status = document.getElementById("calendarLoadStatus");
     var error = document.getElementById("calendarLoadError");
     var retry = document.getElementById("calendarRetry");
-    if (typeof FullCalendar === "undefined" || typeof bootstrap === "undefined") {
+    var modalEl = document.getElementById("eventDetailModal");
+    if (typeof FullCalendar === "undefined" || !modalEl || typeof modalEl.showModal !== "function") {
       error.hidden = false;
       error.querySelector("span").textContent = "Calendar could not start. Reload to try again.";
       retry.textContent = "Reload";
@@ -27,8 +28,6 @@
     var cachedEvents = [];
     var requestNumber = 0;
     var categories = {"Calendar event": "event", "Ike work shift": "work", "Task due date": "task", "Reminder": "reminder"};
-    var modalEl = document.getElementById("eventDetailModal");
-    var modal = new bootstrap.Modal(modalEl);
     var returnFocus;
 
     function wallClock(now) {
@@ -135,7 +134,7 @@
     }
     function detailLink(id, url) {
       var link = document.getElementById(id);
-      link.classList.toggle("d-none", !url);
+      link.hidden = !url;
       if (url) link.href = url;
       else link.removeAttribute("href");
     }
@@ -151,9 +150,9 @@
       detailRow("eventDetailLocation", props.location);
       detailLink("eventDetailItemLink", props.detailUrl);
       detailLink("eventDetailGoogleLink", props.googleUrl);
-      modal.show();
+      if (!modalEl.open) modalEl.showModal();
     }
-    modalEl.addEventListener("hidden.bs.modal", function () {
+    modalEl.addEventListener("close", function () {
       if (returnFocus && returnFocus.isConnected) returnFocus.focus({preventScroll: true});
     });
 

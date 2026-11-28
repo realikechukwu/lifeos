@@ -179,6 +179,8 @@ class UpcomingFeedTests(TestCase):
         self.calendar_event.end_time = time(12)
         self.calendar_event.save()
         response = self.client.get(reverse("web:upcoming"))
-        self.assertContains(response, "Details <span class=\"visually-hidden\">for Dentist")
+        # The event row expands to show its full time even with no Google link.
+        self.assertContains(response, '<details class="row-details">')
+        self.assertContains(response, "11:00 – 12:00</p>")
         item = next(item for item in response.context["items"] if item.title == "Dentist")
         self.assertIn("11:00 – 12:00", item.details_when)

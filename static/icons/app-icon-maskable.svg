@@ -1,20 +1,12 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title description">
-  <title id="title">Family Assistant</title>
-  <desc id="description">A white home and heart on a full-bleed purple background.</desc>
-  <defs>
-    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#8a7df9"/>
-      <stop offset="0.52" stop-color="#6d5ef8"/>
-      <stop offset="1" stop-color="#4634c2"/>
-    </linearGradient>
-    <radialGradient id="glow" cx="0" cy="0" r="1" gradientTransform="translate(210 160) rotate(45) scale(720)">
-      <stop stop-color="#ffffff" stop-opacity=".24"/>
-      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
-    </radialGradient>
-  </defs>
-  <rect width="1024" height="1024" fill="url(#background)"/>
-  <rect width="1024" height="1024" fill="url(#glow)"/>
-  <path fill="#fff" d="M512 246c-14 0-27 5-38 15L220 487c-20 18-22 49-4 69 18 20 49 22 69 4l25-22v200c0 42 34 76 76 76h252c42 0 76-34 76-76V538l25 22c20 18 51 16 69-4 18-20 16-51-4-69L550 261a57 57 0 0 0-38-15Z"/>
-  <path fill="#6d5ef8" d="M512 695c-15-15-99-66-99-136 0-45 32-77 73-77 24 0 45 12 59 31 14-19 35-31 59-31 41 0 73 32 73 77 0 70-84 121-99 136l-33 30-33-30Z"/>
-  <circle cx="815" cy="219" r="24" fill="#fff" fill-opacity=".44"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title id="title">LifeOS</title>
+  <!-- Full-bleed square: the OS applies its own mask. The artwork stays inside the central safe zone. -->
+  <rect width="512" height="512" fill="#5847e6"/>
+  <g fill="none" stroke="#fff9f0" stroke-width="30" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M104 236 256 116 408 236"/>
+    <path d="M364 201V146"/>
+    <path d="M256 352C220 292 144 296 144 352C144 408 220 412 256 352C292 292 368 296 368 352C368 408 292 412 256 352Z"/>
+  </g>
+  <circle cx="196" cy="258" r="24" fill="#fff9f0"/>
+  <circle cx="316" cy="258" r="24" fill="#fff9f0"/>
 </svg>

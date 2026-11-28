@@ -68,6 +68,9 @@ class FeedItem:
     details_when: str = ""
     display_date: date | None = None
     extra_links: list = field(default_factory=list)  # [(label, url), ...]
+    task: Task | None = None  # set for task items so the page can draw a tick circle
+    all_day: bool = False
+    ends: datetime | None = None  # end of a timed event or shift, for "On now" and the end time
 
 
 @dataclass
@@ -147,11 +150,17 @@ def build_upcoming_feed(user, *, window_days: int = UPCOMING_WINDOW_DAYS) -> lis
         if event.recurrence_description:
             title = f"{title} — {event.recurrence_description}"
         details_when = _format_when(event.appointment_date, event.start_time, event.all_day)
+        ends = None
         if not event.all_day and event.end_time:
             details_when += f" – {event.end_time.strftime('%H:%M')}"
+            end_date = event.appointment_date
             if event.start_time and event.end_time < event.start_time:
                 details_when += " (next day)"
+                end_date += timedelta(days=1)
+            ends = _aware(end_date, event.end_time)
         items.append(FeedItem(
+            all_day=event.all_day,
+            ends=ends,
             kind="calendar_event",
             kind_label="Calendar event",
             title=title,
@@ -185,6 +194,8 @@ def build_upcoming_feed(user, *, window_days: int = UPCOMING_WINDOW_DAYS) -> lis
                 details_when += " – " + (local_end.strftime('%a %d %b %H:%M') if local_end.date() != local_start.date() else local_end.strftime('%H:%M'))
         gcal_url = build_google_calendar_event_url(shift.google_event_id, shift.calendar_id)
         items.append(FeedItem(
+            all_day=shift.all_day,
+            ends=None if shift.all_day else shift.ends_at,
             kind="work_shift",
             kind_label="Ike work shift",
             title=shift.display_title,
@@ -225,6 +236,7 @@ def build_upcoming_feed(user, *, window_days: int = UPCOMING_WINDOW_DAYS) -> lis
             is_overdue=overdue,
             is_attention=overdue,
             display_when=_relative_when(task.due_date, task.due_time, today=today),
+            task=task,
         ))
 
     for reminder in Reminder.objects.filter(
@@ -334,7 +346,7 @@ def build_calendar_feed(start: date | None, end: date | None) -> list[dict]:
             "start": fc_start,
             "end": fc_end,
             "allDay": all_day,
-            "color": "#2563eb",
+            "color": "#5847e6",
             "extendedProps": {
                 "type": "Calendar event",
                 "category": "event",
@@ -370,7 +382,7 @@ def build_calendar_feed(start: date | None, end: date | None) -> list[dict]:
             "start": fc_start,
             "end": fc_end,
             "allDay": shift.all_day,
-            "color": "#7c3aed",
+            "color": "#0f766e",
             "extendedProps": {
                 "type": "Ike work shift",
                 "category": "work",
@@ -395,8 +407,8 @@ def build_calendar_feed(start: date | None, end: date | None) -> list[dict]:
             "title": f"Task due: {task.title}",
             "start": _combine_iso(task.due_date, task.due_time),
             "allDay": task.due_time is None,
-            "color": "#dc2626" if overdue else "#f59e0b",
-            "textColor": "#ffffff" if overdue else "#29200c",
+            "color": "#b91c1c" if overdue else "#c2410c",
+            "textColor": "#ffffff",
             "extendedProps": {
                 "type": "Task due date",
                 "category": "task",
@@ -420,8 +432,8 @@ def build_calendar_feed(start: date | None, end: date | None) -> list[dict]:
             "title": f"Reminder: {reminder.title}",
             "start": _combine_iso(reminder.reminder_date, reminder.reminder_time),
             "allDay": False,
-            "color": "#16a34a",
-            "textColor": "#08220f",
+            "color": "#166534",
+            "textColor": "#ffffff",
             "extendedProps": {
                 "type": "Reminder",
                 "category": "reminder",

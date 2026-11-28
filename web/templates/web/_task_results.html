@@ -1,0 +1,49 @@
+{% load ui %}<div class="stack" id="task-results">
+  <nav class="chips" aria-label="Filter tasks">
+    {% for chip in view_chips %}
+      <a class="chip" href="?{{ chip.query }}" {% if chip.active %}aria-current="true"{% endif %}>{{ chip.label }}</a>
+    {% endfor %}
+    {% for chip in person_chips %}
+      <a class="chip" href="?{{ chip.query }}" {% if chip.active %}aria-current="true"{% endif %}>{{ chip.label }}</a>
+    {% endfor %}
+  </nav>
+
+  <ul class="group has-ticks">
+    {% if filters.show == "todo" or filters.show == "" %}
+      <li>
+        <form class="quick-add" method="post" action="{% url 'web:task_quick_add' %}" data-swap="#task-results" data-refocus="#inlineTaskTitle">
+          {% csrf_token %}
+          <input type="hidden" name="next" value="{{ next_url }}">
+          <input type="hidden" name="list_query" value="{{ list_query }}">
+          {% if filters.assigned_to %}<input type="hidden" name="assigned_to" value="{{ filters.assigned_to }}">{% endif %}
+          {% icon "plus" 22 %}
+          <label class="visually-hidden" for="inlineTaskTitle">New task</label>
+          <input id="inlineTaskTitle" name="title" placeholder="Add a task" maxlength="255" required autocomplete="off" enterkeyhint="done">
+          <button type="submit" class="btn btn-primary">Add</button>
+        </form>
+      </li>
+    {% endif %}
+    {% for task in tasks %}
+      {% include "web/_task_row.html" %}
+    {% endfor %}
+  </ul>
+
+  {% if not tasks %}
+    <div class="empty">
+      {% icon "tasks" %}
+      {% if filters.q %}
+        <p class="empty-title">No tasks match “{{ filters.q }}”</p>
+        <p>Try another word, or clear the search.</p>
+      {% elif filters.show == "done" %}
+        <p class="empty-title">Nothing finished yet</p>
+        <p>Ticked-off tasks show up here.</p>
+      {% elif filters.show == "overdue" %}
+        <p class="empty-title">Nothing overdue</p>
+        <p>Everything with a date is on track.</p>
+      {% else %}
+        <p class="empty-title">All clear</p>
+        <p>Nothing to do here. Add a task above, or ask LifeOS on Telegram.</p>
+      {% endif %}
+    </div>
+  {% endif %}
+</div>

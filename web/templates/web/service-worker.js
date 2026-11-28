@@ -1,11 +1,12 @@
 {% load static %}
 const CACHE_PREFIX = "family-assistant-public-";
-const CACHE_NAME = `${CACHE_PREFIX}v2`;
+const CACHE_NAME = `${CACHE_PREFIX}v4`;
 const OFFLINE_URL = "{% static 'offline.html' %}";
 const STATIC_PATH = new URL("{% get_static_prefix %}", self.location.origin).pathname;
 const PUBLIC_ASSETS = [
   OFFLINE_URL,
   "{% static 'css/app.css' %}",
+  "{% static 'js/app.js' %}",
   "{% static 'icons/app-icon.svg' %}",
   "{% static 'icons/app-icon-192.png' %}",
   "{% static 'icons/app-icon-512.png' %}",

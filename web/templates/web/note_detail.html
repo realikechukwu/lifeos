@@ -1,41 +1,28 @@
 {% extends "base.html" %}
-{% block title %}{{ note.title|default:"Note" }} — Family Assistant{% endblock %}
+{% load ui %}
+{% block title %}{{ note.title|default:"Note" }} — LifeOS{% endblock %}
 
 {% block content %}
-<a href="{% url 'web:note_list' %}" class="back-link mb-3">
-  <i class="bi bi-arrow-left"></i> All notes
-</a>
+<a href="{% url 'web:note_list' %}" class="back-link">{% icon "chevron-left" 22 %} Notes</a>
 
-<div class="page-head">
+<header class="page-head">
   <div>
-    <h1 class="page-title">{{ note.title|default:"(untitled note)" }}</h1>
-    <div class="tile-meta">
-      {% if note.category %}<span class="chip chip-brand">{{ note.category }}</span>{% endif %}
-      <span><i class="bi bi-clock"></i> {{ note.created_at|date:"d M Y, H:i" }}</span>
-      {% if note.related_household_member %}
-        <span class="sep"><i class="bi bi-person"></i> {{ note.related_household_member.name }}</span>
-      {% endif %}
-      {% if note.source_email %}
-        <span class="sep"><i class="bi bi-envelope"></i> Created from an email</span>
-      {% endif %}
-    </div>
+    <h1 class="page-title">{{ note.title|default:"Untitled note" }}</h1>
+    <p class="page-sub">
+      {% if note.category %}{{ note.category }} · {% endif %}Updated {{ note.updated_at|date:"j M Y, H:i" }}{% if note.related_household_member %} · {{ note.related_household_member.name }}{% endif %}{% if note.source_email %} · From an email{% endif %}
+    </p>
   </div>
-  <a href="{% url 'web:note_edit' note.id %}" class="btn btn-outline-primary btn-sm">
-    <i class="bi bi-pencil"></i> Edit
-  </a>
-</div>
+  <a href="{% url 'web:note_edit' note.id %}" class="icon-btn" aria-label="Edit note">{% icon "pencil" %}</a>
+</header>
 
-<div class="card">
-  <div class="card-body">
-    {% if note.body %}
-      <p class="prose-body">{{ note.body }}</p>
-    {% else %}
-      <p class="text-faint mb-0">This note has no body.</p>
-    {% endif %}
+{% if note.body %}
+  <article class="card prose">{{ note.body }}</article>
+{% else %}
+  <div class="empty">
+    <p class="empty-title">This note is empty</p>
+    <a href="{% url 'web:note_edit' note.id %}" class="btn btn-tinted">{% icon "pencil" 18 %} Write something</a>
   </div>
-</div>
-{% endblock %}
+{% endif %}
 
-{% block fab %}
-<a href="{% url 'web:note_edit' note.id %}" class="fab" aria-label="Edit note"><i class="bi bi-pencil"></i></a>
+{% include "web/_note_delete.html" %}
 {% endblock %}

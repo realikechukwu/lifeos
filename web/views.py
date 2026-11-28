@@ -8,24 +8,26 @@ logging stay in one place.
 """
 
 from functools import wraps
+from urllib.parse import quote, urlencode
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.db import DatabaseError, connection
-from django.db.models import Q
-from django.http import HttpResponse, JsonResponse
+from django.db.models import F, Q
+from django.http import HttpResponse, JsonResponse, QueryDict
 from django.shortcuts import get_object_or_404, redirect, render
 from django.template.loader import render_to_string
 from django.templatetags.static import static
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.http import require_GET, require_POST
 
 from assistant.services.router import admin_approve_and_execute
 from assistant.services.tasks import cancel_task, complete_task
 from core.models import AssignedTo, AuditLog, Note, ParsedAction, Task
 
-from .forms import NoteForm, ParsedActionReviewForm, TaskForm
+from .forms import NoteForm, ParsedActionReviewForm, QuickTaskForm, TaskForm
 from .services import build_calendar_feed, build_upcoming_feed, build_upcoming_sections, parse_date_param
 
 
@@ -54,9 +56,9 @@ def web_manifest(request):
     """Serve an install manifest with storage-aware static asset URLs."""
     manifest = {
         "id": reverse("web:upcoming"),
-        "name": "Family Assistant",
-        "short_name": "Family",
-        "description": "A private home for your family's plans, tasks, notes, and reminders.",
+        "name": "LifeOS",
+        "short_name": "LifeOS",
+        "description": "Your family's plans, tasks, notes and reminders in one private place.",
         "start_url": reverse("web:upcoming"),
         "scope": "/",
         "lang": "en-GB",
@@ -64,7 +66,7 @@ def web_manifest(request):
         "display": "standalone",
         "display_override": ["standalone", "minimal-ui"],
         "orientation": "any",
-        "background_color": "#f5f4fb",
+        "background_color": "#f2f2f6",
         "theme_color": "#5847e6",
         "categories": ["productivity", "lifestyle"],
         "icons": [
@@ -107,8 +109,8 @@ def web_manifest(request):
         ],
         "shortcuts": [
             {
-                "name": "Upcoming",
-                "short_name": "Upcoming",
+                "name": "Today",
+                "short_name": "Today",
                 "description": "See what is coming up next",
                 "url": reverse("web:upcoming"),
             },
@@ -182,10 +184,14 @@ def health(request):
 @login_required
 def upcoming(request):
     items = build_upcoming_feed(request.user)
+    sections = build_upcoming_sections(items)
     return render(request, "web/upcoming.html", {
         "items": items,
         "attention_items": [item for item in items if item.is_attention],
-        "upcoming_sections": build_upcoming_sections(items),
+        "upcoming_sections": sections,
+        "today_section": next(section for section in sections if section.is_today),
+        "later_sections": [section for section in sections if not section.is_today],
+        "now": timezone.now(),
     })
 
 
@@ -210,40 +216,127 @@ def calendar_events_json(request):
 # Tasks
 # ---------------------------------------------------------------------------
 
-@login_required
-def task_list(request):
+TASK_VIEWS = [("todo", "To do"), ("overdue", "Overdue"), ("done", "Done"), ("all", "All")]
+OPEN_STATUSES = [Task.Status.OPEN, Task.Status.IN_PROGRESS]
+
+
+def _wants_fragment(request) -> bool:
+    """app.js asks for just the changed piece of the page with this header."""
+    return request.headers.get("X-Fragment") == "1"
+
+
+def _with_toast(response, text: str, level: str = "success"):
+    response["X-Toast"] = quote(text)
+    response["X-Toast-Level"] = level
+    return response
+
+
+def _safe_next(request, fallback: str) -> str:
+    target = request.POST.get("next") or request.GET.get("next") or ""
+    if target and url_has_allowed_host_and_scheme(target, {request.get_host()}, request.is_secure()):
+        return target
+    return fallback
+
+
+def _task_filters(params) -> dict:
+    """Read the task list's filters from a query dict. The older `overdue=1`
+    and `status=` links keep working."""
+    show = params.get("show", "")
+    if params.get("overdue") == "1":
+        show = "overdue"
+    if show not in dict(TASK_VIEWS):
+        show = "" if params.get("status") else "todo"
+    return {
+        "show": show,
+        "status": params.get("status", ""),
+        "assigned_to": params.get("assigned_to", ""),
+        "q": params.get("q", "").strip(),
+    }
+
+
+def _task_queryset(filters: dict):
     tasks = Task.objects.all()
-    status = request.GET.get("status", "")
-    assigned_to = request.GET.get("assigned_to", "")
-    q = request.GET.get("q", "").strip()
-    overdue_only = request.GET.get("overdue") == "1"
-    today = timezone.localdate()
+    show = filters["show"]
+    if filters["status"]:
+        tasks = tasks.filter(status=filters["status"])
+    elif show in ("todo", "overdue"):
+        tasks = tasks.filter(status__in=OPEN_STATUSES)
+    elif show == "done":
+        tasks = tasks.filter(status=Task.Status.COMPLETED)
+    if show == "overdue":
+        tasks = tasks.filter(due_date__lt=timezone.localdate(), status__in=OPEN_STATUSES)
+    if filters["assigned_to"]:
+        tasks = tasks.filter(assigned_to=filters["assigned_to"])
+    if filters["q"]:
+        tasks = tasks.filter(Q(title__icontains=filters["q"]) | Q(description__icontains=filters["q"]))
+    if show in ("todo", "overdue"):
+        return tasks.order_by(F("due_date").asc(nulls_last=True), "-created_at")
+    if show == "done":
+        return tasks.order_by(F("completed_at").desc(nulls_last=True))
+    return tasks
 
-    if status:
-        tasks = tasks.filter(status=status)
-    if assigned_to:
-        tasks = tasks.filter(assigned_to=assigned_to)
-    if q:
-        tasks = tasks.filter(Q(title__icontains=q) | Q(description__icontains=q))
-    if overdue_only:
-        tasks = tasks.filter(
-            due_date__lt=today, status__in=[Task.Status.OPEN, Task.Status.IN_PROGRESS]
-        )
 
-    highlight_raw = request.GET.get("highlight", "")
-    highlight_id = int(highlight_raw) if highlight_raw.isdigit() else None
-
-    return render(request, "web/task_list.html", {
-        "tasks": tasks,
+def _task_list_context(request, params, *, next_url: str = "") -> dict:
+    filters = _task_filters(params)
+    highlight_raw = params.get("highlight", "")
+    keep = {key: filters[key] for key in ("assigned_to", "q") if filters[key]}
+    view_chips = [
+        {"label": label, "query": urlencode({**keep, "show": value}), "active": filters["show"] == value}
+        for value, label in TASK_VIEWS
+    ]
+    person_chips = []
+    for value, label in AssignedTo.choices:
+        if value == AssignedTo.UNASSIGNED:
+            continue
+        query = {"show": filters["show"] or "todo"}
+        if filters["q"]:
+            query["q"] = filters["q"]
+        active = filters["assigned_to"] == value
+        if not active:  # tapping the active person again clears it
+            query["assigned_to"] = value
+        person_chips.append({"label": label, "query": urlencode(query), "active": active})
+    return {
+        "tasks": _task_queryset(filters),
+        "filters": filters,
+        "view_chips": view_chips,
+        "person_chips": person_chips,
+        "list_query": params.urlencode(),
+        "highlight_id": int(highlight_raw) if highlight_raw.isdigit() else None,
+        "next_url": next_url or request.get_full_path(),
         "status_choices": Task.Status.choices,
         "assigned_to_choices": AssignedTo.choices,
-        "current_status": status,
-        "current_assigned_to": assigned_to,
-        "current_q": q,
-        "overdue_only": overdue_only,
-        "today": today,
-        "highlight_id": highlight_id,
-    })
+        "today": timezone.localdate(),
+    }
+
+
+@login_required
+def task_list(request):
+    context = _task_list_context(request, request.GET)
+    if _wants_fragment(request):
+        return render(request, "web/_task_results.html", context)
+    return render(request, "web/task_list.html", context)
+
+
+@login_required
+@require_POST
+def task_quick_add(request):
+    """The one-line add box on the Tasks page and in the New sheet."""
+    form = QuickTaskForm(request.POST)
+    if not form.is_valid():
+        messages.error(request, "Give the task a title.")
+        return redirect(_safe_next(request, reverse("web:task_list")))
+    task = form.save()
+    AuditLog.objects.create(
+        action="task_created_via_web", object_type="Task", object_id=str(task.id),
+        success=True, details={"title": task.title, "created_by": request.user.get_username()},
+    )
+    if _wants_fragment(request):
+        params = QueryDict(request.POST.get("list_query", ""))
+        context = _task_list_context(request, params, next_url=_safe_next(request, reverse("web:task_list")))
+        context["highlight_id"] = task.id
+        return _with_toast(render(request, "web/_task_results.html", context), f"Added “{task.title}”")
+    messages.success(request, f"Added “{task.title}”.")
+    return redirect(_safe_next(request, reverse("web:task_list")))
 
 
 @login_required
@@ -283,16 +376,41 @@ def task_edit(request, pk):
     return render(request, "web/task_form.html", {"form": form, "mode": "edit", "task": task})
 
 
+def _task_toggle_done(request, task, toast: str, level: str):
+    """Answer a tick-circle tap: the redrawn row for app.js, or a redirect."""
+    if _wants_fragment(request):
+        next_url = _safe_next(request, reverse("web:task_list"))
+        response = render(request, "web/_task_row.html", {"task": task, "next_url": next_url})
+        return _with_toast(response, toast, level)
+    messages.add_message(request, messages.SUCCESS if level == "success" else messages.INFO, toast)
+    return redirect(_safe_next(request, reverse("web:task_list")))
+
+
 @login_required
 @require_POST
 def task_complete(request, pk):
     task = get_object_or_404(Task, pk=pk)
     if task.status == Task.Status.COMPLETED:
-        messages.info(request, f"“{task.title}” is already complete.")
-    else:
-        complete_task(task)
-        messages.success(request, f"Marked “{task.title}” complete.")
-    return redirect("web:task_list")
+        return _task_toggle_done(request, task, f"“{task.title}” is already complete.", "info")
+    complete_task(task)
+    return _task_toggle_done(request, task, f"Marked “{task.title}” done.", "success")
+
+
+@login_required
+@require_POST
+def task_reopen(request, pk):
+    """Untick a completed task so it is open again."""
+    task = get_object_or_404(Task, pk=pk)
+    if task.status in OPEN_STATUSES:
+        return _task_toggle_done(request, task, f"“{task.title}” is already open.", "info")
+    task.status = Task.Status.OPEN
+    task.completed_at = None
+    task.save(update_fields=["status", "completed_at", "updated_at"])
+    AuditLog.objects.create(
+        action="task_reopened_via_web", object_type="Task", object_id=str(task.id),
+        success=True, details={"title": task.title, "reopened_by": request.user.get_username()},
+    )
+    return _task_toggle_done(request, task, f"Moved “{task.title}” back to To do.", "info")
 
 
 @login_required
@@ -322,13 +440,16 @@ def note_list(request):
     if category:
         notes = notes.filter(category=category)
 
-    categories = (
-        Note.objects.exclude(category="").values_list("category", flat=True).distinct().order_by("category")
-    )
+    context = {
+        "notes": notes, "current_q": q, "current_category": category, "categories": _note_categories(),
+    }
+    if _wants_fragment(request):
+        return render(request, "web/_note_results.html", context)
+    return render(request, "web/note_list.html", context)
 
-    return render(request, "web/note_list.html", {
-        "notes": notes, "current_q": q, "current_category": category, "categories": categories,
-    })
+
+def _note_categories():
+    return Note.objects.exclude(category="").values_list("category", flat=True).distinct().order_by("category")
 
 
 @login_required
@@ -346,7 +467,7 @@ def note_create(request):
         messages.error(request, "Please fix the errors below.")
     else:
         form = NoteForm()
-    return render(request, "web/note_form.html", {"form": form, "mode": "create"})
+    return render(request, "web/note_form.html", {"form": form, "mode": "create", "categories": _note_categories()})
 
 
 @login_required
@@ -371,7 +492,27 @@ def note_edit(request, pk):
         messages.error(request, "Please fix the errors below.")
     else:
         form = NoteForm(instance=note)
-    return render(request, "web/note_form.html", {"form": form, "mode": "edit", "note": note})
+    return render(request, "web/note_form.html", {
+        "form": form, "mode": "edit", "note": note, "categories": _note_categories(),
+    })
+
+
+@login_required
+@require_POST
+def note_delete(request, pk):
+    note = get_object_or_404(Note, pk=pk)
+    note_id, label = note.id, str(note)
+    # Keep the full text in the audit log so a mistaken delete can be recovered.
+    AuditLog.objects.create(
+        action="note_deleted_via_web", object_type="Note", object_id=str(note_id),
+        success=True, details={
+            "title": note.title, "body": note.body, "category": note.category,
+            "deleted_by": request.user.get_username(),
+        },
+    )
+    note.delete()
+    messages.success(request, f"Deleted “{label}”.")
+    return redirect("web:note_list")
 
 
 # ---------------------------------------------------------------------------

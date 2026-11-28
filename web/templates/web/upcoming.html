@@ -1,59 +1,62 @@
 {% extends "base.html" %}
-{% block title %}Upcoming — Family Assistant{% endblock %}
+{% load ui %}
+{% block title %}Today — LifeOS{% endblock %}
 
 {% block content %}
-<div class="page-head upcoming-head">
+<header class="page-head">
   <div>
-    <h1 class="page-title">Upcoming</h1>
-    <p class="page-sub">What needs attention today, followed by the next 30 days.</p>
+    <p class="overline">{% now "l j F" %}</p>
+    <h1 class="page-title">Today</h1>
   </div>
-</div>
-
-<div class="chip-row" aria-label="Upcoming shortcuts">
-  <a href="#today" class="chip-link"><i class="bi bi-crosshair" aria-hidden="true"></i> Today</a>
-  <a href="{% url 'web:task_create' %}" class="chip-link d-none d-md-inline-flex"><i class="bi bi-plus-lg" aria-hidden="true"></i> New task</a>
-  <a href="{% url 'web:note_create' %}" class="chip-link"><i class="bi bi-pencil" aria-hidden="true"></i> New note</a>
-</div>
+  <button type="button" class="avatar lg" data-open-dialog="accountSheet" aria-haspopup="dialog" aria-label="Account: {{ user.get_username }}">{{ user.get_username|slice:":1" }}</button>
+</header>
 
 {% if attention_items %}
-  <details class="upcoming-attention">
-    <summary class="upcoming-attention-summary">
-      <span><i class="bi bi-exclamation-circle-fill" aria-hidden="true"></i> Needs attention</span>
-      <span class="chip chip-danger">{{ attention_items|length }}</span>
-    </summary>
-    <div class="upcoming-attention-list" role="list">
-      {% for item in attention_items %}
-        {% include "web/_upcoming_item.html" with item=item %}
-      {% endfor %}
-    </div>
-  </details>
+<section class="section" aria-labelledby="needs-heading">
+  <div class="section-head">
+    <h2 class="section-title" id="needs-heading">Needs you</h2>
+    <span class="count warn">{{ attention_items|length }}<span class="visually-hidden"> item{{ attention_items|length|pluralize }}</span></span>
+  </div>
+  <ul class="group has-ticks">
+    {% for item in attention_items %}{% include "web/_upcoming_item.html" %}{% endfor %}
+  </ul>
+</section>
 {% endif %}
 
-<div class="upcoming-agenda" aria-label="Upcoming agenda">
-  {% for section in upcoming_sections %}
-    <section class="upcoming-section{% if section.is_today %} is-today{% endif %}" id="{% if section.is_today %}today{% else %}date-{{ section.date|date:'Y-m-d' }}{% endif %}" aria-labelledby="upcoming-section-{{ forloop.counter }}">
-      <h2 class="section-label upcoming-date-label" id="upcoming-section-{{ forloop.counter }}">
-        <span>{{ section.label }}</span>
-        {% if section.is_today or section.label == 'Tomorrow' %}<time datetime="{{ section.date|date:'Y-m-d' }}">{{ section.date|date:"j M" }}</time>{% endif %}
-        {% if section.items %}<span class="upcoming-count">{{ section.items|length }} <span class="visually-hidden">item{{ section.items|length|pluralize }}</span></span>{% endif %}
-      </h2>
-      {% if section.items %}
-        <div class="upcoming-section-list" role="list">
-          {% for item in section.items %}
-            {% include "web/_upcoming_item.html" with item=item %}
-          {% endfor %}
-        </div>
-      {% else %}
-        <div class="upcoming-today-empty">
-          <i class="bi bi-check2-circle" aria-hidden="true"></i>
-          <span>Nothing scheduled for today.</span>
-        </div>
-      {% endif %}
-    </section>
-  {% endfor %}
-</div>
-{% endblock %}
+<section class="section" id="today" aria-labelledby="today-heading">
+  <div class="section-head">
+    <h2 class="section-title" id="today-heading">Schedule</h2>
+    <a class="section-link" href="{% url 'web:calendar' %}">Calendar</a>
+  </div>
+  {% if today_section.items %}
+    <ul class="group">
+      {% for item in today_section.items %}{% include "web/_upcoming_item.html" %}{% endfor %}
+    </ul>
+  {% else %}
+    <div class="group">
+      <p class="row muted-row">{% icon "check" 18 %} Nothing scheduled for today.</p>
+    </div>
+  {% endif %}
+</section>
 
-{% block fab %}
-<a href="{% url 'web:task_create' %}" class="fab" aria-label="New task"><i class="bi bi-plus-lg" aria-hidden="true"></i></a>
+<section class="section days" aria-labelledby="later-heading">
+  <div class="section-head">
+    <h2 class="section-title" id="later-heading">Coming up</h2>
+    <a class="section-link" href="{% url 'web:task_list' %}">All tasks</a>
+  </div>
+  {% for section in later_sections %}
+    <div class="section" id="date-{{ section.date|date:'Y-m-d' }}">
+      <h3 class="section-title day"><strong>{{ section.label }}</strong>{% if section.label == "Tomorrow" %} · {{ section.date|date:"D j M" }}{% endif %}</h3>
+      <ul class="group">
+        {% for item in section.items %}{% include "web/_upcoming_item.html" %}{% endfor %}
+      </ul>
+    </div>
+  {% empty %}
+    <div class="empty">
+      {% icon "calendar" %}
+      <p class="empty-title">A clear month</p>
+      <p>Nothing else is booked or due in the next 30 days.</p>
+    </div>
+  {% endfor %}
+</section>
 {% endblock %}
