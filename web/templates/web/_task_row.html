@@ -1,0 +1,24 @@
+{% load ui %}{% with done=task|is_done open=task|is_open %}
+<li class="row{% if done %} is-done{% endif %}{% if task.id == highlight_id %} is-highlighted{% endif %}" id="task-{{ task.id }}">
+  {% if done or open %}
+    <form class="tick-form" method="post" action="{% if done %}{% url 'web:task_reopen' task.id %}{% else %}{% url 'web:task_complete' task.id %}{% endif %}" data-swap="#task-{{ task.id }}">
+      {% csrf_token %}
+      <input type="hidden" name="next" value="{{ next_url|default:request.get_full_path }}">
+      <button type="submit" class="tick" aria-pressed="{% if done %}true{% else %}false{% endif %}" aria-label="{% if done %}Mark as not done{% else %}Mark as done{% endif %}: {{ task.title }}">{% icon "check" %}</button>
+    </form>
+  {% else %}
+    <span class="tick-placeholder" aria-hidden="true"></span>
+  {% endif %}
+  <a class="row-main row-link" href="{% url 'web:task_edit' task.id %}">
+    <span class="row-title">{{ task.title }}</span>
+    <span class="row-sub{% if task|is_overdue %} warn{% endif %}">
+      {% if task.status == "cancelled" %}Cancelled · {% elif task.status == "in_progress" %}In progress · {% endif %}{% if done %}Done{% else %}{{ task|due_label }}{% endif %}{% if task.priority == "high" and open %} · High priority{% endif %}
+    </span>
+  </a>
+  {% with initial=task.assigned_to|assignee_initial %}
+    {% if initial %}
+      <span class="avatar{% if initial == 'W' %} w{% elif initial == 'B' %} b{% endif %}" role="img" aria-label="Assigned to {{ task.get_assigned_to_display }}">{{ initial }}</span>
+    {% endif %}
+  {% endwith %}
+</li>
+{% endwith %}

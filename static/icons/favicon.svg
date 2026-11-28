@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title id="title">LifeOS</title>
+  <!-- Small-size version: bolder lines and no chimney so it reads at 16-32 px. -->
+  <rect width="512" height="512" rx="114" fill="#5847e6"/>
+  <g fill="none" stroke="#fff9f0" stroke-width="46" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M96 244 256 116 416 244"/>
+    <path d="M256 356C220 292 136 296 136 356C136 416 220 420 256 356C292 292 376 296 376 356C376 416 292 420 256 356Z"/>
+  </g>
+  <circle cx="192" cy="258" r="34" fill="#fff9f0"/>
+  <circle cx="320" cy="258" r="34" fill="#fff9f0"/>
+</svg>

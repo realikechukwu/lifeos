@@ -33,6 +33,7 @@ class Element {
   appendChild(child) { this.children.push(child); }
   getBoundingClientRect() { return {top: this.top}; }
   scrollIntoView() { this.scrolled = true; }
+  showModal() { this.open = true; this.shows = (this.shows || 0) + 1; }
   focus() { this.focused = true; }
   click() { this.handlers.click(); }
 }
@@ -49,7 +50,6 @@ function harness(fetcher) {
   class FixedDate extends Date {
     constructor(...args) { super(...(args.length ? args : ['2026-09-12T10:00:00Z'])); }
   }
-  let modalShows = 0;
   let fetches = 0;
   const document = {
     getElementById: el, querySelectorAll: () => filters,
@@ -72,7 +72,7 @@ function harness(fetcher) {
   }
   const context = {
     document, Date: FixedDate, Intl, Set, URL, console,
-    FullCalendar: {Calendar}, bootstrap: {Modal: class { show() { modalShows++; } }},
+    FullCalendar: {Calendar},
     fetch: (...args) => { fetches++; return fetcher(...args); },
     window: {location: {origin: 'http://localhost'}, matchMedia: () => ({matches: true}),
       requestAnimationFrame: fn => frames.push(fn), setInterval() {}}
@@ -91,7 +91,7 @@ function harness(fetcher) {
     await new Promise(resolve => setImmediate(resolve));
     while (frames.length) frames.shift()();
   }
-  return {el, root, filters, calendar, request, flush, get fetches() { return fetches; }, get modalShows() { return modalShows; }};
+  return {el, root, filters, calendar, request, flush, get fetches() { return fetches; }, get modalShows() { return el('eventDetailModal').shows || 0; }};
 }
 const response = events => Promise.resolve({ok: true, json: () => Promise.resolve(events)});
 const events = [
@@ -175,6 +175,6 @@ test('event rows open from the keyboard and omit blank metadata', async () => {
   assert.equal(h.modalShows, 1);
   assert.equal(h.el('eventDetailLocation').hidden, true);
   assert.match(h.el('eventDetailWhen').textContent, /11:00 – 12:00/);
-  h.el('eventDetailModal').handlers['hidden.bs.modal']();
+  h.el('eventDetailModal').handlers['close']();
   assert.equal(row.focused, true);
 });

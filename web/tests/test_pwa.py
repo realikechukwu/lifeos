@@ -14,7 +14,8 @@ class PwaEndpointTests(SimpleTestCase):
         self.assertIn("public", response["Cache-Control"])
 
         manifest = response.json()
-        self.assertEqual(manifest["name"], "Family Assistant")
+        self.assertEqual(manifest["name"], "LifeOS")
+        self.assertEqual(manifest["short_name"], "LifeOS")
         self.assertEqual(manifest["start_url"], "/")
         self.assertEqual(manifest["scope"], "/")
         self.assertEqual(manifest["display"], "standalone")
@@ -53,7 +54,8 @@ class PwaEndpointTests(SimpleTestCase):
             "icons/app-icon-maskable-512.png",
             "icons/apple-touch-icon.png",
             "icons/favicon.ico",
-            "images/og-family-assistant.jpg",
+            "icons/favicon.svg",
+            "images/og-lifeos.jpg",
             "offline.html",
         ]
         for asset in assets:
@@ -79,6 +81,6 @@ class PageMetadataTests(SimpleTestCase):
             html,
         )
         self.assertIn(
-            'content="https://family.example/static/images/og-family-assistant.jpg"',
+            'content="https://family.example/static/images/og-lifeos.jpg"',
             html,
         )

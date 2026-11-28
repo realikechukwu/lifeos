@@ -15,14 +15,17 @@ urlpatterns = [
 
     path("tasks/", views.task_list, name="task_list"),
     path("tasks/new/", views.task_create, name="task_create"),
+    path("tasks/quick-add/", views.task_quick_add, name="task_quick_add"),
     path("tasks/<int:pk>/edit/", views.task_edit, name="task_edit"),
     path("tasks/<int:pk>/complete/", views.task_complete, name="task_complete"),
+    path("tasks/<int:pk>/reopen/", views.task_reopen, name="task_reopen"),
     path("tasks/<int:pk>/cancel/", views.task_cancel, name="task_cancel"),
 
     path("notes/", views.note_list, name="note_list"),
     path("notes/new/", views.note_create, name="note_create"),
     path("notes/<int:pk>/", views.note_detail, name="note_detail"),
     path("notes/<int:pk>/edit/", views.note_edit, name="note_edit"),
+    path("notes/<int:pk>/delete/", views.note_delete, name="note_delete"),
 
     path("review/", views.review_list, name="review_list"),
     path("review/<int:pk>/", views.review_detail, name="review_detail"),
