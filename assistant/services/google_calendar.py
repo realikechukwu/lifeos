@@ -13,6 +13,9 @@ from googleapiclient.discovery import build
 
 from core.models import AuditLog, CalendarEventRecord, ParsedAction, Reminder
 
+from .calendar_categories import (
+    calendar_id_for, category_for_calendar_id, managed_calendar_ids, resolve_category,
+)
 from .extractor import build_recurrence, combine_date_and_time, times_are_valid
 from .gmail import get_google_credentials, is_authorised_sender
 
@@ -54,15 +57,20 @@ def compute_duplicate_key(
 
 def check_for_duplicate(parsed_action: ParsedAction, calendar_id: str):
     """Deterministic duplicate check, in the required order. Returns
-    ("duplicate" | "reschedule" | "none", CalendarEventRecord | None)."""
+    ("duplicate" | "reschedule" | "none", CalendarEventRecord | None).
+
+    ``calendar_id`` is GOOGLE_CALENDAR_ID, which stands for the household's
+    whole set of category calendars: a repeat of an event is still a
+    duplicate if it was sorted into a different category the second time."""
 
     # 1. Same non-empty booking reference. Do not treat the source message by
     # itself as a duplicate: one authorised message may legitimately request
     # several distinct calendar events.
     booking_ref = (parsed_action.booking_reference or "").strip()
     if booking_ref:
+        calendar_ids = {calendar_id, *managed_calendar_ids()}
         candidate = (
-            CalendarEventRecord.objects.filter(booking_reference=booking_ref, calendar_id=calendar_id)
+            CalendarEventRecord.objects.filter(booking_reference=booking_ref, calendar_id__in=calendar_ids)
             .order_by("-created_at")
             .first()
         )
@@ -171,7 +179,10 @@ def create_event_for_parsed_action(parsed_action: ParsedAction) -> CalendarEvent
 
     Returns the created (or pre-existing, for an exact duplicate)
     CalendarEventRecord, or None if this was a possible-reschedule case
-    (parsed_action is updated to pending_review / requires_review instead)."""
+    (parsed_action is updated to pending_review / requires_review instead).
+
+    The event goes on its category's calendar; duplicate keys are always
+    computed against GOOGLE_CALENDAR_ID so they hold across categories."""
     calendar_id = settings.GOOGLE_CALENDAR_ID
     if not calendar_id:
         raise RuntimeError("GOOGLE_CALENDAR_ID is not configured.")
@@ -268,8 +279,14 @@ def create_event_for_parsed_action(parsed_action: ParsedAction) -> CalendarEvent
     if recurrence.rrule:
         event_body["recurrence"] = [recurrence.rrule]
 
+    category = resolve_category(parsed_action.calendar_category, title, parsed_action.location or "")
+    if parsed_action.calendar_category != category:
+        parsed_action.calendar_category = category
+        parsed_action.save(update_fields=["calendar_category"])
+    target_calendar_id = calendar_id_for(category)
+
     service = build("calendar", "v3", credentials=get_google_credentials(), cache_discovery=False)
-    created_event = service.events().insert(calendarId=calendar_id, body=event_body).execute()
+    created_event = service.events().insert(calendarId=target_calendar_id, body=event_body).execute()
 
     key = compute_duplicate_key(
         title, appt_date, _start_time_or_all_day_str(parsed_action), calendar_id, parsed_action.recurrence_frequency
@@ -279,7 +296,7 @@ def create_event_for_parsed_action(parsed_action: ParsedAction) -> CalendarEvent
         parsed_action=parsed_action,
         incoming_email=parsed_action.incoming_email,
         google_event_id=created_event.get("id", ""),
-        calendar_id=calendar_id,
+        calendar_id=target_calendar_id,
         title=title,
         appointment_date=appt_date,
         start_time=parsed_action.start_time,
@@ -353,7 +370,7 @@ def reschedule_calendar_event(
         record.title,
         appointment_date,
         "ALL_DAY" if all_day else start_time.strftime("%H:%M"),
-        record.calendar_id,
+        settings.GOOGLE_CALENDAR_ID or record.calendar_id,
     )
     record.save(update_fields=[
         "appointment_date", "start_time", "end_time", "all_day", "duplicate_key", "updated_at"
@@ -394,48 +411,62 @@ def cancel_calendar_event(record: CalendarEventRecord, *, source_email=None) -> 
     )
 
 
-def list_calendar_events(start_date, end_date, *, query: str = "", max_results: int = 100) -> list[dict]:
-    """Read events live from the shared Google Calendar in ``[start_date, end_date)``.
+def _event_sort_key(event: dict):
+    """All-day events first on their day, then by start time."""
+    start = event["start"]
+    day = start[:10]
+    return (day, 0 if event["all_day"] else 1, start)
 
-    Includes everything on the calendar (events added directly in Google,
-    LifeOS events and mirrored Patchwork shifts) with recurring series
-    expanded into single occurrences.
+
+def list_calendar_events(start_date, end_date, *, query: str = "", max_results: int = 100) -> list[dict]:
+    """Read events live from the household's Google calendars in ``[start_date, end_date)``.
+
+    Includes everything on the main calendar and each category calendar
+    (events added directly in Google, LifeOS events and mirrored Patchwork
+    shifts) with recurring series expanded into single occurrences.
     """
-    calendar_id = settings.GOOGLE_CALENDAR_ID
-    if not calendar_id:
-        raise RuntimeError("GOOGLE_CALENDAR_ID is not configured.")
+    calendar_ids = managed_calendar_ids()
     zone = timezone.get_current_timezone()
     time_min = timezone.make_aware(datetime.combine(start_date, time.min), zone)
     time_max = timezone.make_aware(datetime.combine(end_date, time.min), zone)
-    params = {
-        "calendarId": calendar_id,
-        "timeMin": time_min.isoformat(),
-        "timeMax": time_max.isoformat(),
-        "singleEvents": True,
-        "orderBy": "startTime",
-        "maxResults": max(1, min(max_results, 250)),
-        "timeZone": str(zone),
-    }
-    if query:
-        params["q"] = query
+    limit = max(1, min(max_results, 250))
     service = build("calendar", "v3", credentials=get_google_credentials(), cache_discovery=False)
-    items = service.events().list(**params).execute().get("items", [])
-
-    owned = dict(CalendarEventRecord.objects.filter(calendar_id=calendar_id).values_list("google_event_id", "id"))
+    owned = dict(
+        CalendarEventRecord.objects.filter(calendar_id__in=calendar_ids).values_list("google_event_id", "id")
+    )
     events = []
-    for item in items:
-        if item.get("status") == "cancelled":
-            continue
-        start = item.get("start", {})
-        end = item.get("end", {})
-        events.append({
-            "lifeos_event_id": owned.get(item.get("recurringEventId") or item.get("id")),
-            "title": item.get("summary", "(no title)"),
-            "all_day": "date" in start,
-            "start": start.get("dateTime") or start.get("date", ""),
-            "end": end.get("dateTime") or end.get("date", ""),
-            "location": item.get("location", ""),
-            "description": (item.get("description") or "")[:500],
-            "recurring": bool(item.get("recurringEventId")),
-        })
-    return events
+    for calendar_id in calendar_ids:
+        params = {
+            "calendarId": calendar_id,
+            "timeMin": time_min.isoformat(),
+            "timeMax": time_max.isoformat(),
+            "singleEvents": True,
+            "orderBy": "startTime",
+            "maxResults": limit,
+            "timeZone": str(zone),
+        }
+        if query:
+            params["q"] = query
+        items = service.events().list(**params).execute().get("items", [])
+        category = category_for_calendar_id(calendar_id)
+        for item in items:
+            if item.get("status") == "cancelled":
+                continue
+            start = item.get("start", {})
+            end = item.get("end", {})
+            event = {
+                "lifeos_event_id": owned.get(item.get("recurringEventId") or item.get("id")),
+                "title": item.get("summary", "(no title)"),
+                "all_day": "date" in start,
+                "start": start.get("dateTime") or start.get("date", ""),
+                "end": end.get("dateTime") or end.get("date", ""),
+                "location": item.get("location", ""),
+                "description": (item.get("description") or "")[:500],
+                "recurring": bool(item.get("recurringEventId")),
+            }
+            if len(calendar_ids) > 1:
+                event["category"] = category
+            events.append(event)
+    if len(calendar_ids) > 1:
+        events.sort(key=_event_sort_key)
+    return events[:limit]

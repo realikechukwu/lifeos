@@ -181,6 +181,12 @@ GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
 GOOGLE_CLIENT_SECRETS_FILE = os.environ.get("GOOGLE_CLIENT_SECRETS_FILE", "")
 GOOGLE_CALENDAR_ID = os.environ.get("GOOGLE_CALENDAR_ID", "")
+# Optional per-category calendars so each kind of event shows in its own
+# colour on the phone. Any left empty falls back to GOOGLE_CALENDAR_ID, which
+# also holds everything personal (assistant/services/calendar_categories.py).
+GOOGLE_CALENDAR_ID_WORK = os.environ.get("GOOGLE_CALENDAR_ID_WORK", "")
+GOOGLE_CALENDAR_ID_FAMILY = os.environ.get("GOOGLE_CALENDAR_ID_FAMILY", "")
+GOOGLE_CALENDAR_ID_HEALTH = os.environ.get("GOOGLE_CALENDAR_ID_HEALTH", "")
 GOOGLE_ASSISTANT_EMAIL = os.environ.get("GOOGLE_ASSISTANT_EMAIL", "lifeofchukwudi@gmail.com")
 
 # Private iCalendar feed supplied by Patchwork. This is a bearer-style URL:

@@ -224,6 +224,7 @@ class ParsedActionAdmin(admin.ModelAdmin):
         "meeting_url",
         "organiser",
         "booking_reference",
+        "calendar_category",
         # Task
         "due_date",
         "due_time",
