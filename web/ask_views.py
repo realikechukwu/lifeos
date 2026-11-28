@@ -24,7 +24,7 @@ from django.views.decorators.http import require_GET, require_POST
 from assistant.agent.documents import DOCX_MIME
 from assistant.agent.loop import REFUSAL_REPLY
 from assistant.agent.proposals import ToolInputError, decide, summary as proposal_summary
-from assistant.agent.web import close_thread, enqueue_web_message, greeting_name, open_thread_for
+from assistant.agent.web import close_thread, enqueue_web_message, greeting_name, is_thread_stale, open_thread_for
 from core.models import AgentDocumentDelivery, AgentJob, AgentMessage, AgentProposal, AgentThread, GeneratedDocument, WebAccount
 
 SUGGESTION_CHIPS = [
@@ -287,23 +287,18 @@ def present_proposal(proposal: AgentProposal) -> dict:
     }
 
 
-def _build_timeline(
-    thread: AgentThread | None, *, after_id: int = 0, include_user: bool = True
-) -> tuple[list[dict], int]:
-    """Turn a thread's append-only AgentMessages into display items for Ask.
-
-    When include_user is False (polling updates), returns only assistant
-    replies, proposal groups and document downloads after after_id.
-    """
+def _build_timeline(thread: AgentThread | None) -> tuple[list[dict], int]:
+    """Turn a thread's append-only AgentMessages into display items for initial Ask render."""
     if thread is None:
-        return [], after_id
+        return [], 0
 
     all_messages = list(thread.messages.order_by("id"))
-    last_message_id = max((m.id for m in all_messages), default=after_id)
+    last_message_id = max((m.id for m in all_messages), default=0)
     proposals_by_id = {p.pk: p for p in thread.proposals.order_by("id")}
     deliveries = list(
         AgentDocumentDelivery.objects.filter(job__thread=thread)
         .select_related("document", "job")
+        .defer("document__data", "document__content", "job__input_blocks", "job__reply_text")
         .order_by("id")
     )
     docs_by_id = {d.document_id: d.document for d in deliveries}
@@ -326,13 +321,12 @@ def _build_timeline(
             if user_text or attachment:
                 turn_proposal_ids.clear()
                 turn_document_ids.clear()
-                if include_user and message.id > after_id:
-                    items.append({
-                        "kind": "user",
-                        "id": message.id,
-                        "text": user_text,
-                        "attachment": attachment,
-                    })
+                items.append({
+                    "kind": "user",
+                    "id": message.id,
+                    "text": user_text,
+                    "attachment": attachment,
+                })
         elif message.role == AgentMessage.Role.ASSISTANT:
             reply_text = _extract_assistant_display(message, blocks)
             if not reply_text and not turn_proposal_ids and not turn_document_ids:
@@ -349,17 +343,16 @@ def _build_timeline(
                     placed_docs.add(did)
             turn_proposal_ids.clear()
             turn_document_ids.clear()
-            if message.id > after_id:
-                pending_ids = [c["id"] for c in cards if c["is_pending"]]
-                items.append({
-                    "kind": "assistant",
-                    "id": message.id,
-                    "text": reply_text,
-                    "cards": cards,
-                    "pending_ids": pending_ids,
-                    "group_id": f"proposals-msg-{message.id}",
-                    "documents": docs,
-                })
+            pending_ids = [c["id"] for c in cards if c["is_pending"]]
+            items.append({
+                "kind": "assistant",
+                "id": message.id,
+                "text": reply_text,
+                "cards": cards,
+                "pending_ids": pending_ids,
+                "group_id": f"proposals-msg-{message.id}",
+                "documents": docs,
+            })
 
     # Attach any remaining proposals or deliveries on this thread (for instance
     # when created directly or when a job finished without tool_result JSON).
@@ -367,7 +360,7 @@ def _build_timeline(
         present_proposal(p) for pid, p in proposals_by_id.items() if pid not in placed_proposals
     ]
     leftover_docs = [doc for did, doc in docs_by_id.items() if did not in placed_docs]
-    if (leftover_cards or leftover_docs) and (after_id == 0 or last_message_id > after_id):
+    if leftover_cards or leftover_docs:
         if items and items[-1]["kind"] == "assistant":
             items[-1]["cards"].extend(leftover_cards)
             items[-1]["pending_ids"] = [c["id"] for c in items[-1]["cards"] if c["is_pending"]]
@@ -387,23 +380,126 @@ def _build_timeline(
     return items, last_message_id
 
 
-def _active_web_job(user) -> AgentJob | None:
-    return (
-        AgentJob.objects.filter(
-            channel=AgentThread.Channel.WEB,
-            web_user=user,
-            status__in=[AgentJob.Status.QUEUED, AgentJob.Status.RUNNING],
-        )
-        .select_related("thread")
-        .order_by("-id")
-        .first()
+def _build_updates(thread: AgentThread | None, *, after_id: int) -> tuple[list[dict], int]:
+    """Incremental poll builder: query only messages with id > after_id and
+    resolve proposal cards and documents from finished jobs' reply_metadata."""
+    if thread is None:
+        return [], after_id
+
+    # Lightweight scan of new message ids only (defers content/content_json).
+    new_rows = list(
+        thread.messages.filter(id__gt=after_id)
+        .values_list("id", "role", "stop_reason")
+        .order_by("id")
     )
+    if not new_rows:
+        return [], after_id
+
+    last_message_id = new_rows[-1][0]
+    reply_ids = [
+        msg_id
+        for msg_id, role, stop_reason in new_rows
+        if role == AgentMessage.Role.ASSISTANT and stop_reason != "tool_use"
+    ]
+    if not reply_ids:
+        return [], last_message_id
+
+    assistant_messages = list(
+        thread.messages.filter(id__in=reply_ids)
+        .only("id", "thread_id", "role", "stop_reason", "content", "content_json")
+        .order_by("id")
+    )
+    reply_id_set = set(reply_ids)
+
+    proposals_for_msg: dict[int, list[int]] = {}
+    docs_for_msg: dict[int, list[int]] = {}
+    needed_proposal_ids: set[int] = set()
+    needed_doc_ids: set[int] = set()
+    for meta in (
+        AgentJob.objects.filter(
+            thread=thread,
+            channel=AgentThread.Channel.WEB,
+            status=AgentJob.Status.DONE,
+        )
+        .order_by("id")
+        .values_list("reply_metadata", flat=True)
+    ):
+        if not isinstance(meta, dict):
+            continue
+        msg_id = meta.get("assistant_message_id")
+        if msg_id not in reply_id_set:
+            continue
+        p_ids = [pid for pid in (meta.get("proposal_ids") or []) if type(pid) is int]
+        d_ids = [did for did in (meta.get("document_ids") or []) if type(did) is int]
+        if p_ids:
+            proposals_for_msg.setdefault(msg_id, []).extend(p_ids)
+            needed_proposal_ids.update(p_ids)
+        if d_ids:
+            docs_for_msg.setdefault(msg_id, []).extend(d_ids)
+            needed_doc_ids.update(d_ids)
+
+    proposals_by_id = (
+        {p.pk: p for p in AgentProposal.objects.filter(pk__in=needed_proposal_ids, thread=thread)}
+        if needed_proposal_ids
+        else {}
+    )
+    docs_by_id = (
+        {
+            d.pk: d
+            for d in GeneratedDocument.objects.filter(pk__in=needed_doc_ids).only("id", "title", "filename")
+        }
+        if needed_doc_ids
+        else {}
+    )
+
+    items: list[dict] = []
+    for message in assistant_messages:
+        blocks = _message_blocks(message)
+        reply_text = _extract_assistant_display(message, blocks)
+        cards = [
+            present_proposal(proposals_by_id[pid])
+            for pid in dict.fromkeys(proposals_for_msg.get(message.id, []))
+            if pid in proposals_by_id
+        ]
+        docs = [
+            docs_by_id[did]
+            for did in dict.fromkeys(docs_for_msg.get(message.id, []))
+            if did in docs_by_id
+        ]
+        if not reply_text and not cards and not docs:
+            continue
+        pending_ids = [c["id"] for c in cards if c["is_pending"]]
+        items.append({
+            "kind": "assistant",
+            "id": message.id,
+            "text": reply_text,
+            "cards": cards,
+            "pending_ids": pending_ids,
+            "group_id": f"proposals-msg-{message.id}",
+            "documents": docs,
+        })
+
+    return items, last_message_id
+
+
+def _active_web_job(user, *, include_text: bool = False) -> AgentJob | None:
+    qs = AgentJob.objects.filter(
+        channel=AgentThread.Channel.WEB,
+        web_user=user,
+        status__in=[AgentJob.Status.QUEUED, AgentJob.Status.RUNNING],
+    ).select_related("thread")
+    if include_text:
+        qs = qs.defer("input_blocks", "reply_text")
+    else:
+        qs = qs.defer("input_blocks", "reply_text", "text")
+    return qs.order_by("-id").first()
 
 
 def _latest_failed_job(user, thread: AgentThread | None) -> AgentJob | None:
     """Return the latest web job if it failed on the current conversation."""
     latest = (
         AgentJob.objects.filter(channel=AgentThread.Channel.WEB, web_user=user)
+        .only("id", "status", "thread_id", "created_at", "finished_at")
         .order_by("-id")
         .first()
     )
@@ -412,8 +508,13 @@ def _latest_failed_job(user, thread: AgentThread | None) -> AgentJob | None:
     if thread is not None:
         if latest.thread_id not in (thread.id, None):
             return None
-        last_reply = thread.messages.filter(role=AgentMessage.Role.ASSISTANT).order_by("-id").first()
-        if last_reply and latest.finished_at and last_reply.created_at > latest.finished_at:
+        last_reply_at = (
+            thread.messages.filter(role=AgentMessage.Role.ASSISTANT)
+            .order_by("-id")
+            .values_list("created_at", flat=True)
+            .first()
+        )
+        if last_reply_at and latest.finished_at and last_reply_at > latest.finished_at:
             return None
         return latest
     last_closed = (
@@ -437,7 +538,7 @@ def ask_page(request):
     if account is None:
         return render(request, "web/ask_not_setup.html")
 
-    active_job = _active_web_job(request.user)
+    active_job = _active_web_job(request.user, include_text=True)
     if active_job and active_job.thread_id:
         thread = active_job.thread
     else:
@@ -518,7 +619,7 @@ def ask_updates(request):
             .first()
         )
 
-    items, last_message_id = _build_timeline(thread, after_id=after_id, include_user=False)
+    items, last_message_id = _build_updates(thread, after_id=after_id)
     failed_job = None if (active_job or items) else _latest_failed_job(request.user, thread)
     html = ""
     if items:
@@ -559,19 +660,23 @@ def ask_retry(request, pk):
     account = _web_account_for(request.user)
     if account is None:
         return HttpResponse("Ask isn't set up for your account yet.", status=403)
+    if not settings.AGENT_ENABLED:
+        response = HttpResponse("The LifeOS assistant is currently switched off.", status=400, content_type="text/plain; charset=utf-8")
+        return _with_toast(response, "The LifeOS assistant is currently switched off.", "error")
 
     job = get_object_or_404(
-        AgentJob,
+        AgentJob.objects.select_related("thread").defer("input_blocks", "reply_text", "text"),
         pk=pk,
         channel=AgentThread.Channel.WEB,
         web_user=request.user,
         status=AgentJob.Status.FAILED,
     )
-    if job.thread_id is None or job.thread.closed_at is not None:
-        if _wants_fragment(request):
-            return HttpResponse("Please send your message again.", status=409)
-        messages.error(request, "Please send your message again.")
-        return redirect("web:ask")
+    if job.thread_id is None or is_thread_stale(job.thread):
+        if job.thread_id is not None and job.thread.closed_at is None:
+            job.thread.closed_at = timezone.now()
+            job.thread.save(update_fields=["closed_at"])
+        response = HttpResponse("Please send your message again.", status=409, content_type="text/plain; charset=utf-8")
+        return _with_toast(response, "Please send your message again.", "error")
 
     AgentJob.objects.filter(pk=job.pk, status=AgentJob.Status.FAILED).update(
         status=AgentJob.Status.QUEUED,

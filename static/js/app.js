@@ -410,13 +410,24 @@
           headers: {"X-Fragment": "1"},
           credentials: "same-origin"
         }).then(function (response) {
-          if (!response.ok) throw new Error("Failed");
+          toastFrom(response);
+          if (!response.ok) {
+            return response.text().then(function (msg) {
+              var err = new Error(msg || "Could not retry.");
+              err.status = response.status;
+              throw err;
+            });
+          }
           return response.text();
         }).then(function (html) {
           if (errorBox) replace(errorBox, html);
           else appendHtml(html);
           startPolling();
-        }).catch(function () {
+        }).catch(function (err) {
+          if (err && err.status === 409) {
+            if (errorBox) errorBox.remove();
+            return;
+          }
           targetForm.removeAttribute("data-ask-retry");
           targetForm.submit();
         });

@@ -70,6 +70,17 @@ def greeting_name(account: WebAccount) -> str:
     return ""
 
 
+def is_thread_stale(thread: AgentThread, *, now=None) -> bool:
+    """Whether a thread is closed, past the idle limit, or on an older prompt."""
+    now = now or timezone.now()
+    idle_limit = timedelta(hours=settings.AGENT_THREAD_IDLE_HOURS)
+    return (
+        thread.closed_at is not None
+        or now - thread.last_activity_at > idle_limit
+        or thread.prompt_version != PROMPT_VERSION
+    )
+
+
 def open_thread_for(user) -> AgentThread | None:
     """Return the user's active web thread, closing it if idle or outdated."""
     now = timezone.now()
@@ -82,8 +93,7 @@ def open_thread_for(user) -> AgentThread | None:
         .order_by("-last_activity_at")
         .first()
     )
-    idle_limit = timedelta(hours=settings.AGENT_THREAD_IDLE_HOURS)
-    if thread and (now - thread.last_activity_at > idle_limit or thread.prompt_version != PROMPT_VERSION):
+    if thread and is_thread_stale(thread, now=now):
         thread.closed_at = now
         thread.save(update_fields=["closed_at"])
         return None
@@ -157,6 +167,8 @@ def _image_mime(filename: str, content_type: str) -> str | None:
 
 def enqueue_web_message(*, user, account: WebAccount, text: str, uploaded_file=None) -> AgentJob:
     """Validate and queue a web chat message (with optional photo or document)."""
+    if not settings.AGENT_ENABLED:
+        raise ToolInputError("The LifeOS assistant is currently switched off.")
     clean_text = (text or "").strip()[:8000]
     if not clean_text and uploaded_file is None:
         raise ToolInputError("Write a message or attach a file.")
@@ -172,6 +184,8 @@ def enqueue_web_message(*, user, account: WebAccount, text: str, uploaded_file=N
     content_type = str(getattr(uploaded_file, "content_type", "") or "")
     img_mime = _image_mime(filename, content_type)
     if img_mime:
+        if not settings.AGENT_PHOTOS_ENABLED:
+            raise ToolInputError("Photo uploads are currently switched off.")
         if getattr(uploaded_file, "size", 0) > MAX_PHOTO_BYTES:
             raise ToolInputError("That image is over 5 MB. Send a smaller image.")
         data = uploaded_file.read(MAX_PHOTO_BYTES + 1)
@@ -210,6 +224,8 @@ def enqueue_web_message(*, user, account: WebAccount, text: str, uploaded_file=N
     doc_mime = upload_mime(filename, content_type)
     if doc_mime is None:
         raise ToolInputError(f"Send a photo (up to 5 MB) or {SUPPORTED_UPLOADS} (up to 10 MB).")
+    if not settings.AGENT_DOCUMENTS_ENABLED:
+        raise ToolInputError("Document uploads are currently switched off.")
     if getattr(uploaded_file, "size", 0) > MAX_UPLOAD_BYTES:
         raise ToolInputError(f"Upload {SUPPORTED_UPLOADS} no larger than 10 MB.")
     data = uploaded_file.read(MAX_UPLOAD_BYTES + 1)
@@ -250,7 +266,7 @@ def enqueue_web_message(*, user, account: WebAccount, text: str, uploaded_file=N
 def process_web_jobs(jobs: list[AgentJob], *, client=None) -> None:
     """Answer one or more queued web messages from the same user as one turn."""
     job = jobs[0]
-    if not settings.AGENT_WEB_CHAT_ENABLED:
+    if not settings.AGENT_WEB_CHAT_ENABLED or not settings.AGENT_ENABLED:
         raise ValueError("Web chat has been disabled; job was not executed.")
     user = job.web_user
     account = WebAccount.objects.filter(user=user).select_related("user").first() if user else None
@@ -313,14 +329,19 @@ def process_web_jobs(jobs: list[AgentJob], *, client=None) -> None:
     if not job.reply_metadata.get("model_finished"):
         result = run_turn(thread, ctx, client=client)
         job.reply_text = result.text
-        last_msg = thread.messages.filter(role=AgentMessage.Role.ASSISTANT).order_by("-id").first()
+        last_msg_id = (
+            thread.messages.filter(role=AgentMessage.Role.ASSISTANT)
+            .order_by("-id")
+            .values_list("id", flat=True)
+            .first()
+        )
         doc_ids = list(job.document_deliveries.values_list("document_id", flat=True))
         job.reply_metadata = {
             **job.reply_metadata,
             "model_finished": True,
             "proposal_ids": ctx.proposal_ids,
             "document_ids": doc_ids,
-            "assistant_message_id": last_msg.id if last_msg else None,
+            "assistant_message_id": last_msg_id,
         }
         AgentJob.objects.filter(pk=job.pk).update(reply_text=job.reply_text, reply_metadata=job.reply_metadata)
         job.document_deliveries.filter(sent_at__isnull=True).update(sent_at=timezone.now())

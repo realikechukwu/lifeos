@@ -21,7 +21,7 @@ def pending_review_count(request):
 
 def ask_navigation(request):
     """Whether the Ask chat screen is enabled and set up for this login."""
-    if not settings.AGENT_WEB_CHAT_ENABLED:
+    if not settings.AGENT_WEB_CHAT_ENABLED or not settings.AGENT_ENABLED:
         return {"ask_available": False}
     user = getattr(request, "user", None)
     if not user or not user.is_authenticated:

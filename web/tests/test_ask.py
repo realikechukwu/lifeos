@@ -14,7 +14,9 @@ import httpx2
 from pypdf import PdfWriter
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.db import connection
 from django.test import TestCase, override_settings
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
 
@@ -22,7 +24,8 @@ from assistant.agent.documents import DOCX_MIME, MAX_UPLOAD_BYTES
 from assistant.agent.formatting import to_web_html
 from assistant.agent.loop import PROMPT_VERSION
 from assistant.agent.photos import MAX_PHOTO_BYTES
-from assistant.agent.web import close_thread, thread_for
+from assistant.agent.proposals import ToolInputError
+from assistant.agent.web import close_thread, enqueue_web_message, thread_for
 from assistant.agent.worker import claim_next_jobs, run_jobs
 from assistant.services.telegram_handlers import process_telegram_update
 from assistant.tests.test_agent import (
@@ -57,6 +60,7 @@ WEB_ASK_SETTINGS = {
     "AGENT_WEB_CHAT_ENABLED": True,
     "AGENT_PROPOSALS_ENABLED": True,
     "AGENT_DOCUMENTS_ENABLED": True,
+    "AGENT_PHOTOS_ENABLED": True,
     "AGENT_PERSONAL_INBOX_ENABLED": True,
     "PERSONAL_GMAIL_IKE": "ike@example.com",
 }
@@ -106,6 +110,20 @@ class WebAskFlagOffTests(TestCase):
         self.assertNotContains(home, f'href="{reverse("web:ask")}"')
         tasks_page = self.client.get(reverse("web:task_list"))
         self.assertNotContains(tasks_page, 'aria-label="New task or note"')
+
+    @override_settings(AGENT_WEB_CHAT_ENABLED=True, AGENT_ENABLED=False)
+    def test_agent_disabled_makes_ask_unavailable_and_refuses_send(self):
+        home = self.client.get(reverse("web:upcoming"))
+        self.assertFalse(home.context["ask_available"])
+        self.assertNotContains(home, f'href="{reverse("web:ask")}"')
+
+        response = self.client.post(reverse("web:ask_send"), {"message": "Hi"}, **FRAGMENT)
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(AgentJob.objects.exists())
+
+        account = WebAccount.objects.get(user=self.user)
+        with self.assertRaises(ToolInputError):
+            enqueue_web_message(user=self.user, account=account, text="Hi")
 
 
 @override_settings(**WEB_ASK_SETTINGS)
@@ -304,6 +322,99 @@ class WebAskThreadAndChannelTests(TestCase):
         self.assertEqual(len(retry_client.calls[0]["messages"]), 2)
         self.assertEqual(AgentJob.objects.get().status, AgentJob.Status.DONE)
 
+    def test_retry_refuses_stale_prompt_version_and_idle_thread_with_409(self):
+        self.client.force_login(self.ike)
+
+        # Case 1: prompt_version rotated after failure
+        self.client.post(reverse("web:ask_send"), {"message": "First try"}, **FRAGMENT)
+        request = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
+        bad = anthropic.BadRequestError("bad", response=httpx2.Response(400, request=request), body=None)
+        self._run_worker(FakeClient(bad))
+        job = AgentJob.objects.order_by("id").last()
+        self.assertEqual(job.status, AgentJob.Status.FAILED)
+
+        AgentThread.objects.filter(pk=job.thread_id).update(prompt_version="stale-version")
+        resp = self.client.post(reverse("web:ask_retry", args=[job.id]), **FRAGMENT)
+        self.assertEqual(resp.status_code, 409)
+        self.assertIn("send your message again", resp.content.decode().lower())
+        job.refresh_from_db()
+        self.assertEqual(job.status, AgentJob.Status.FAILED)
+        self.assertIsNotNone(job.thread.closed_at)
+
+        # Case 2: thread past idle limit after failure
+        self.client.post(reverse("web:ask_send"), {"message": "Second try"}, **FRAGMENT)
+        self._run_worker(FakeClient(bad))
+        job2 = AgentJob.objects.order_by("id").last()
+        AgentThread.objects.filter(pk=job2.thread_id).update(
+            last_activity_at=timezone.now() - timedelta(hours=9)
+        )
+        resp2 = self.client.post(reverse("web:ask_retry", args=[job2.id]))
+        self.assertEqual(resp2.status_code, 409)
+        self.assertIn("send your message again", resp2.content.decode().lower())
+        job2.refresh_from_db()
+        self.assertEqual(job2.status, AgentJob.Status.FAILED)
+        self.assertIsNotNone(job2.thread.closed_at)
+
+    def test_updates_poll_does_not_load_earlier_upload_messages_and_uses_job_metadata(self):
+        self.client.force_login(self.ike)
+
+        # Turn 1: earlier message containing an uploaded photo
+        img = SimpleUploadedFile("receipt.png", b"\x89PNG\r\n\x1a\n" + b"x" * 200, content_type="image/png")
+        self.assertEqual(
+            self.client.post(reverse("web:ask_send"), {"message": "Look at this", "attachment": img}, **FRAGMENT).status_code,
+            200,
+        )
+        self._run_worker(FakeClient(reply(text("Got your receipt."))))
+        upload_msg_id = AgentMessage.objects.filter(role=AgentMessage.Role.USER).order_by("id").first().id
+        after_turn_1 = AgentMessage.objects.order_by("-id").values_list("id", flat=True).first()
+
+        # Turn 2 queued: poll should never select message content/content_json or earlier rows
+        self.client.post(reverse("web:ask_send"), {"message": "Add a task and draft a doc"}, **FRAGMENT)
+        with CaptureQueriesContext(connection) as queued_queries:
+            poll_queued = self.client.get(reverse("web:ask_updates"), {"after": after_turn_1}).json()
+        self.assertTrue(poll_queued["polling"])
+        self.assertEqual(poll_queued["html"], "")
+        msg_sqls = [q["sql"] for q in queued_queries if "core_agentmessage" in q["sql"]]
+        self.assertTrue(msg_sqls)
+        for sql in msg_sqls:
+            self.assertIn(f"> {after_turn_1}", sql)
+            self.assertNotIn('"content"', sql)
+            self.assertNotIn('"content_json"', sql)
+
+        # Worker finishes Turn 2 with a proposal and a generated document
+        self._run_worker(FakeClient(
+            reply(
+                tool_use("propose_task", {"title": "Pay invoice"}, tool_id="toolu_p"),
+                tool_use("make_document", {"title": "Summary", "content": "Details"}, tool_id="toolu_d"),
+                stop_reason="tool_use",
+            ),
+            reply(text("Done — ready to confirm.")),
+        ))
+        reply_msg_id = AgentMessage.objects.filter(role=AgentMessage.Role.ASSISTANT).order_by("-id").first().id
+
+        # Poll after Turn 2: must query only id > after_turn_1 / new reply ids, never earlier upload message
+        with CaptureQueriesContext(connection) as done_queries:
+            poll_done = self.client.get(reverse("web:ask_updates"), {"after": after_turn_1}).json()
+        self.assertFalse(poll_done["polling"])
+        self.assertIn("Done — ready to confirm.", poll_done["html"])
+        self.assertIn("Pay invoice", poll_done["html"])
+        self.assertIn("summary.docx", poll_done["html"])
+        self.assertEqual(poll_done["last_message_id"], reply_msg_id)
+
+        done_msg_sqls = [q["sql"] for q in done_queries if "core_agentmessage" in q["sql"]]
+        self.assertEqual(len(done_msg_sqls), 2, done_msg_sqls)
+        scan_sql, fetch_sql = done_msg_sqls
+        self.assertIn(f'"core_agentmessage"."id" > {after_turn_1}', scan_sql)
+        self.assertNotIn('"content"', scan_sql)
+        self.assertNotIn('"content_json"', scan_sql)
+        self.assertIn(f'"core_agentmessage"."id" IN ({reply_msg_id})', fetch_sql)
+        self.assertGreater(reply_msg_id, after_turn_1)
+        self.assertLess(upload_msg_id, after_turn_1)
+        doc_sqls = [q["sql"] for q in done_queries if "core_generateddocument" in q["sql"]]
+        self.assertTrue(doc_sqls)
+        for sql in doc_sqls:
+            self.assertNotIn('"data"', sql)
+
 
 @override_settings(**WEB_ASK_SETTINGS)
 class WebAskProposalTests(TestCase):
@@ -454,6 +565,37 @@ class WebAskUploadAndDocumentTests(TestCase):
         resp = self.client.post(reverse("web:ask_send"), {"attachment": huge_txt}, **FRAGMENT)
         self.assertEqual(resp.status_code, 400)
         self.assertFalse(AgentJob.objects.exists())
+
+    @override_settings(AGENT_PHOTOS_ENABLED=False)
+    def test_photo_upload_refused_when_photos_flag_is_off(self):
+        img = SimpleUploadedFile("card.png", b"\x89PNG\r\n\x1a\nfake", content_type="image/png")
+        resp = self.client.post(reverse("web:ask_send"), {"attachment": img}, **FRAGMENT)
+        self.assertEqual(resp.status_code, 400)
+        self.assertFalse(AgentJob.objects.exists())
+
+        # Plain text and documents are unaffected when only photos are disabled
+        ok_resp = self.client.post(reverse("web:ask_send"), {"message": "Just text"}, **FRAGMENT)
+        self.assertEqual(ok_resp.status_code, 200)
+        self.assertEqual(AgentJob.objects.count(), 1)
+
+    @override_settings(AGENT_DOCUMENTS_ENABLED=False)
+    def test_document_upload_refused_when_documents_flag_is_off(self):
+        pdf = SimpleUploadedFile("letter.pdf", _minimal_pdf_bytes(), content_type="application/pdf")
+        resp = self.client.post(reverse("web:ask_send"), {"attachment": pdf}, **FRAGMENT)
+        self.assertEqual(resp.status_code, 400)
+        self.assertFalse(AgentJob.objects.exists())
+        self.assertFalse(AgentUpload.objects.exists())
+
+        md = SimpleUploadedFile("notes.md", b"# Skills", content_type="text/markdown")
+        resp_md = self.client.post(reverse("web:ask_send"), {"attachment": md}, **FRAGMENT)
+        self.assertEqual(resp_md.status_code, 400)
+        self.assertFalse(AgentJob.objects.exists())
+
+        # Photos remain allowed when only documents are disabled
+        img = SimpleUploadedFile("card.png", b"\x89PNG\r\n\x1a\nfake", content_type="image/png")
+        ok_resp = self.client.post(reverse("web:ask_send"), {"attachment": img}, **FRAGMENT)
+        self.assertEqual(ok_resp.status_code, 200)
+        self.assertEqual(AgentJob.objects.count(), 1)
 
     def test_generated_document_download_link_and_role_check(self):
         self.client.post(reverse("web:ask_send"), {"message": "Write a cover letter"}, **FRAGMENT)
