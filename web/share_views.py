@@ -4,8 +4,10 @@ text plus an optional instruction, and they land in the sender's Ask chat.
 This is the one Ask endpoint without a login session. The Shortcut proves who
 it is with a per-person share key (see WebAccount.issue_share_key) in the
 Authorization header, so the endpoint is exempt from CSRF. A key can only
-queue messages: confirming anything the agent proposes still needs a tap in
-the signed-in web app.
+queue messages. When the person types an instruction, new events, tasks,
+notes and reminders the agent proposes are applied straight away, as with an
+emailed instruction; edits, cancellations, Homebase changes and anything from
+a share without an instruction still need a tap in the signed-in web app.
 
 Replies are short plain text, because the Shortcut shows the response body
 as a notification, whatever the status code.

@@ -125,6 +125,26 @@ def close_thread(user) -> bool:
     )
 
 
+SHARE_AUTO_APPLY_NOTE = (
+    "This message came from the iPhone share sheet with the speaker's own instruction. "
+    "New events, tasks, notes and reminders you propose are added straight away, without a Confirm tap, "
+    "so only propose ones the instruction asks for. Edits, cancellations and Homebase changes still wait "
+    "for the speaker to confirm in Ask."
+)
+SHARE_NO_INSTRUCTION_NOTE = (
+    "This message came from the iPhone share sheet without an instruction. "
+    "Anything you propose waits for the speaker to confirm in Ask."
+)
+
+
+def share_mode(jobs) -> str:
+    """'instruction' or 'bare' for a turn that includes a share-sheet message, else ''."""
+    shares = [j for j in jobs if (j.reply_metadata or {}).get("source") == "share"]
+    if not shares:
+        return ""
+    return "instruction" if any(j.reply_metadata.get("share_instruction") for j in shares) else "bare"
+
+
 def build_context_note(
     *,
     thread: AgentThread,
@@ -132,6 +152,7 @@ def build_context_note(
     first_turn: bool,
     outcome_note: str | None = None,
     upload_note: str = "",
+    share: str = "",
 ) -> str:
     """Trusted per-turn facts, sent as a system message after the user's words."""
     now = timezone.localtime()
@@ -153,6 +174,10 @@ def build_context_note(
         lines.append(outcome_note)
     if upload_note:
         lines.append(upload_note)
+    if share == "instruction":
+        lines.append(SHARE_AUTO_APPLY_NOTE)
+    elif share == "bare":
+        lines.append(SHARE_NO_INSTRUCTION_NOTE)
     return "\n".join(lines)
 
 
@@ -311,11 +336,14 @@ def enqueue_shared_items(*, user, account: WebAccount, text: str = "", files=(),
     if len(files) > MAX_SHARE_FILES:
         raise ToolInputError(f"Share up to {MAX_SHARE_FILES} files at a time.")
     instruction = (text or "").strip()[:8000]
+    # Only the person's own words count as an instruction; shared text and
+    # file contents are untrusted, so without words new items still wait.
+    has_instruction = bool(instruction)
     shared = (shared_text or "").strip()[:SHARED_TEXT_CHARS]
     if shared:
         shared_block = f"Text shared from another app:\n{shared}"
         instruction = f"{instruction}\n\n{shared_block}" if instruction else shared_block
-    metadata = {"source": "share"}
+    metadata = {"source": "share", "share_instruction": has_instruction}
     if not files:
         if not instruction:
             raise ToolInputError("Nothing was shared. Share a file, photo or some text.")
@@ -353,6 +381,7 @@ def enqueue_shared_items(*, user, account: WebAccount, text: str = "", files=(),
 def process_web_jobs(jobs: list[AgentJob], *, client=None) -> None:
     """Answer one or more queued web messages from the same user as one turn."""
     job = jobs[0]
+    share = share_mode(jobs)
     if not settings.AGENT_WEB_CHAT_ENABLED or not settings.AGENT_ENABLED:
         raise ValueError("Web chat has been disabled; job was not executed.")
     user = job.web_user
@@ -388,6 +417,7 @@ def process_web_jobs(jobs: list[AgentJob], *, client=None) -> None:
             first_turn=first_turn,
             outcome_note=outcome_note,
             upload_note=upload_note,
+            share=share,
         )
         batch_metadata = {**job.reply_metadata, "batch_id": job.pk}
         with transaction.atomic():
@@ -412,6 +442,7 @@ def process_web_jobs(jobs: list[AgentJob], *, client=None) -> None:
         job=job,
         channel=AgentThread.Channel.WEB,
         web_user=user,
+        auto_apply_creations=share == "instruction",
     )
     if not job.reply_metadata.get("model_finished"):
         result = run_turn(thread, ctx, client=client)

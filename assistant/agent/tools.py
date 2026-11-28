@@ -49,6 +49,9 @@ class ToolContext:
     web_user: object | None = None
     incoming_email: IncomingEmail | None = None
     newest_instruction: str = ""
+    # Set for a share-sheet turn that carries the person's own instruction:
+    # new events, tasks, notes and reminders are applied without a Confirm tap.
+    auto_apply_creations: bool = False
     gmail_service: object | None = None
     proposal_ids: list[int] = field(default_factory=list)
     events: list[str] = field(default_factory=list)

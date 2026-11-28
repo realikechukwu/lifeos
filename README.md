@@ -344,10 +344,12 @@ landing page is **Upcoming**.
   remains available within the current month. The Today strip stays available on
   empty days. Calendar and details use the app timezone and 24-hour times; sent
   reminders and completed tasks retain their status as history.
-- **Menu and Settings** — on phones the ☰ button opens a drawer with the
-  signed-in name, Settings, the review queue and (for staff) Admin; on wide
-  screens the same links sit at the foot of the sidebar. **Settings**
-  (`/settings/`) holds the share key described below.
+- **Menu and Settings** — on phones the ☰ button (top right, beside the
+  page's own button) slides in a panel from the right: the signed-in name,
+  app tiles for Today, Calendar, Ask, Tasks, Notes and Review (with the
+  waiting count), then Settings, Admin (staff only) and Log out. On wide
+  screens the sidebar does this job. **Settings** (`/settings/`) holds the
+  share key described below.
 
 ### Share from iPhone
 
@@ -363,13 +365,23 @@ login linked to a household role.
 - The Shortcut posts to `POST /ask/share/` with the key in the
   `Authorization` header (with or without `Bearer `), a `message` form field
   and one or more `file` fields. The endpoint has no session, so it skips
-  CSRF; a key can only queue messages, and anything the agent proposes still
-  needs a tap in the signed-in app.
+  CSRF; a key can only queue messages.
+- Like an emailed instruction, a share that includes the person's own typed
+  instruction has its new events, tasks, notes and reminders applied straight
+  away. Edits, cancellations and Homebase changes still wait for a tap in Ask,
+  and so does everything from a share with no instruction, since the shared
+  file or text alone is untrusted.
 - Several files shared at once are queued together and answered as one turn.
   Replies are short plain text, which the Shortcut shows as a notification.
 - iPhone camera photos are HEIC, which the agent can't read, so the Shortcut
   converts them to JPEG; the endpoint explains the problem if one gets through.
-  Settings has step-by-step instructions for building the Shortcut.
+- A ready-made, signed Shortcut is in
+  [`deploy/shortcuts/Send to LifeOS.shortcut`](deploy/shortcuts/). AirDrop it
+  to an iPhone (or open it on a Mac signed in to the same iCloud account); it
+  asks for the share address and key when added, so one file serves everyone.
+  `deploy/shortcuts/build_send_to_lifeos.py` rebuilds it; sign the result with
+  `shortcuts sign --mode anyone`. Settings also has step-by-step instructions
+  for building it by hand.
 - nginx must accept the larger bodies: the example config now sets
   `client_max_body_size 40m`.
 

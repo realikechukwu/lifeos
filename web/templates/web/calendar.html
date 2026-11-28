@@ -8,13 +8,13 @@
 
 {% block content %}
 <header class="page-head" id="calendarTodayStrip">
-  {% include "web/_menu_button.html" %}
   <div>
     <p class="overline"><time id="calendarTodayDate"></time></p>
     <h1 class="page-title">Calendar</h1>
     <p class="page-sub" id="calendarTodaySummary" role="status"></p>
   </div>
   <button type="button" class="btn btn-tinted" id="calendarJumpToday">Today</button>
+  {% include "web/_menu_button.html" %}
 </header>
 
 <div class="chips" role="group" aria-label="Show on the calendar">
