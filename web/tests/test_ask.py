@@ -22,7 +22,7 @@ from django.utils import timezone
 
 from assistant.agent.documents import DOCX_MIME, MAX_UPLOAD_BYTES
 from assistant.agent.formatting import to_web_html
-from assistant.agent.loop import PROMPT_VERSION
+from assistant.agent.loop import PROMPT_VERSION, run_turn
 from assistant.agent.photos import MAX_PHOTO_BYTES
 from assistant.agent.proposals import ToolInputError
 from assistant.agent.web import close_thread, enqueue_web_message, thread_for
@@ -414,6 +414,38 @@ class WebAskThreadAndChannelTests(TestCase):
         self.assertTrue(doc_sqls)
         for sql in doc_sqls:
             self.assertNotIn('"data"', sql)
+
+    def test_poll_holds_back_reply_until_its_cards_are_recorded(self):
+        self.client.force_login(self.ike)
+        self.client.post(reverse("web:ask_send"), {"message": "Add a task"}, **FRAGMENT)
+        gap_polls = []
+
+        def run_turn_then_poll(*args, **kwargs):
+            result = run_turn(*args, **kwargs)
+            # The final reply is saved but the job is not done yet. The user
+            # sends another message, and the browser's poll lands here.
+            self.client.post(reverse("web:ask_send"), {"message": "And another"}, **FRAGMENT)
+            gap_polls.append(self.client.get(reverse("web:ask_updates"), {"after": 0}).json())
+            return result
+
+        with patch("assistant.agent.web.run_turn", side_effect=run_turn_then_poll):
+            self._run_worker(FakeClient(
+                reply(tool_use("propose_task", {"title": "Pay invoice"}, tool_id="toolu_p"), stop_reason="tool_use"),
+                reply(text("Ready to confirm.")),
+            ))
+        reply_msg_id = AgentMessage.objects.filter(role=AgentMessage.Role.ASSISTANT).order_by("-id").first().id
+
+        gap = gap_polls[0]
+        self.assertTrue(gap["polling"])
+        self.assertEqual(gap["html"], "")
+        self.assertLess(gap["last_message_id"], reply_msg_id)
+
+        # First job done, second still queued: the reply now arrives with its card.
+        after = self.client.get(reverse("web:ask_updates"), {"after": gap["last_message_id"]}).json()
+        self.assertTrue(after["polling"])
+        self.assertIn("Ready to confirm.", after["html"])
+        self.assertIn("Pay invoice", after["html"])
+        self.assertEqual(after["last_message_id"], reply_msg_id)
 
 
 @override_settings(**WEB_ASK_SETTINGS)

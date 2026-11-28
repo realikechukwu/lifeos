@@ -380,7 +380,7 @@ def _build_timeline(thread: AgentThread | None) -> tuple[list[dict], int]:
     return items, last_message_id
 
 
-def _build_updates(thread: AgentThread | None, *, after_id: int) -> tuple[list[dict], int]:
+def _build_updates(thread: AgentThread | None, *, after_id: int, job_active: bool = False) -> tuple[list[dict], int]:
     """Incremental poll builder: query only messages with id > after_id and
     resolve proposal cards and documents from finished jobs' reply_metadata."""
     if thread is None:
@@ -404,13 +404,8 @@ def _build_updates(thread: AgentThread | None, *, after_id: int) -> tuple[list[d
     if not reply_ids:
         return [], last_message_id
 
-    assistant_messages = list(
-        thread.messages.filter(id__in=reply_ids)
-        .only("id", "thread_id", "role", "stop_reason", "content", "content_json")
-        .order_by("id")
-    )
     reply_id_set = set(reply_ids)
-
+    recorded_reply_ids: set[int] = set()
     proposals_for_msg: dict[int, list[int]] = {}
     docs_for_msg: dict[int, list[int]] = {}
     needed_proposal_ids: set[int] = set()
@@ -429,6 +424,7 @@ def _build_updates(thread: AgentThread | None, *, after_id: int) -> tuple[list[d
         msg_id = meta.get("assistant_message_id")
         if msg_id not in reply_id_set:
             continue
+        recorded_reply_ids.add(msg_id)
         p_ids = [pid for pid in (meta.get("proposal_ids") or []) if type(pid) is int]
         d_ids = [did for did in (meta.get("document_ids") or []) if type(did) is int]
         if p_ids:
@@ -437,6 +433,25 @@ def _build_updates(thread: AgentThread | None, *, after_id: int) -> tuple[list[d
         if d_ids:
             docs_for_msg.setdefault(msg_id, []).extend(d_ids)
             needed_doc_ids.update(d_ids)
+
+    if job_active:
+        # The worker saves the final reply a few queries before it records the
+        # turn's proposal and document ids and marks the job done. Stop before
+        # the first reply no finished job has recorded yet, so a later poll
+        # returns it together with its cards instead of skipping past them.
+        unrecorded = [msg_id for msg_id in reply_ids if msg_id not in recorded_reply_ids]
+        if unrecorded:
+            cutoff = unrecorded[0]
+            reply_ids = [msg_id for msg_id in reply_ids if msg_id < cutoff]
+            last_message_id = max((row[0] for row in new_rows if row[0] < cutoff), default=after_id)
+            if not reply_ids:
+                return [], last_message_id
+
+    assistant_messages = list(
+        thread.messages.filter(id__in=reply_ids)
+        .only("id", "thread_id", "role", "stop_reason", "content", "content_json")
+        .order_by("id")
+    )
 
     proposals_by_id = (
         {p.pk: p for p in AgentProposal.objects.filter(pk__in=needed_proposal_ids, thread=thread)}
@@ -619,7 +634,7 @@ def ask_updates(request):
             .first()
         )
 
-    items, last_message_id = _build_updates(thread, after_id=after_id)
+    items, last_message_id = _build_updates(thread, after_id=after_id, job_active=active_job is not None)
     failed_job = None if (active_job or items) else _latest_failed_job(request.user, thread)
     html = ""
     if items:
