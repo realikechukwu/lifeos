@@ -1,0 +1,25 @@
+{% load ui %}
+<div class="ask-turn ask-turn-assistant" data-message-id="{{ item.id }}">
+  {% if item.text %}
+  <div class="ask-reply">{{ item.text|ask_text }}</div>
+  {% endif %}
+  {% if item.cards %}
+    {% include "web/_ask_proposal_group.html" with cards=item.cards pending_ids=item.pending_ids group_id=item.group_id %}
+  {% endif %}
+  {% if item.documents %}
+  <ul class="group ask-docs">
+    {% for doc in item.documents %}
+    <li>
+      <a class="row" href="{% url 'web:ask_document_download' doc.id %}">
+        <span class="tile-icon teal" aria-hidden="true">{% icon "note" 20 %}</span>
+        <span class="row-main">
+          <span class="row-title strong">{{ doc.title }}</span>
+          <span class="row-sub">{{ doc.filename }}</span>
+        </span>
+        {% icon "download" 20 %}
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</div>

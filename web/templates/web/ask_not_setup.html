@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% load ui %}
+{% block title %}Ask — LifeOS{% endblock %}
+
+{% block content %}
+<header class="page-head">
+  <div>
+    <h1 class="page-title">Ask</h1>
+  </div>
+</header>
+
+<div class="empty">
+  <span class="ask-empty-badge" aria-hidden="true">{% icon "chat" 28 %}</span>
+  <h2 class="empty-title">Ask isn’t set up for your account yet</h2>
+  <p>Your login needs to be linked to a household role in Django admin before you can chat with LifeOS here.</p>
+  <a class="btn btn-primary" href="{% url 'web:upcoming' %}">Back to Today</a>
+</div>
+{% endblock %}

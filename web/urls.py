@@ -1,6 +1,6 @@
 from django.urls import path
 
-from . import views
+from . import ask_views, views
 
 app_name = "web"
 
@@ -9,6 +9,16 @@ urlpatterns = [
     path("service-worker.js", views.service_worker, name="service_worker"),
 
     path("", views.upcoming, name="upcoming"),
+
+    path("ask/", ask_views.ask_page, name="ask"),
+    path("ask/send/", ask_views.ask_send, name="ask_send"),
+    path("ask/updates/", ask_views.ask_updates, name="ask_updates"),
+    path("ask/new/", ask_views.ask_new, name="ask_new"),
+    path("ask/retry/<int:pk>/", ask_views.ask_retry, name="ask_retry"),
+    path("ask/proposals/confirm-all/", ask_views.ask_proposals_confirm_all, name="ask_proposals_confirm_all"),
+    path("ask/proposals/<int:pk>/confirm/", ask_views.ask_proposal_confirm, name="ask_proposal_confirm"),
+    path("ask/proposals/<int:pk>/cancel/", ask_views.ask_proposal_cancel, name="ask_proposal_cancel"),
+    path("ask/documents/<int:pk>/", ask_views.ask_document_download, name="ask_document_download"),
 
     path("calendar/", views.calendar_page, name="calendar"),
     path("calendar/events.json", views.calendar_events_json, name="calendar_events_json"),

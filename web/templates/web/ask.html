@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% load ui %}
+{% block title %}Ask — LifeOS{% endblock %}
+{% block body_class %} class="is-ask"{% endblock %}
+
+{% block app_shell %}
+<div class="ask-shell"
+     data-ask-chat
+     data-updates-url="{% url 'web:ask_updates' %}"
+     data-last-message-id="{{ last_message_id }}"
+     data-polling="{% if polling %}true{% else %}false{% endif %}">
+
+  <header class="ask-header">
+    <a class="icon-btn" href="{% url 'web:upcoming' %}" aria-label="Back to Today">
+      {% icon "chevron-down" 22 %}
+    </a>
+    <div class="ask-header-title">
+      <h1>LifeOS</h1>
+      <p>Private to you</p>
+    </div>
+    <form method="post" action="{% url 'web:ask_new' %}" class="ask-new-form" data-ask-new>
+      {% csrf_token %}
+      <button type="submit" class="icon-btn" aria-label="New chat">
+        {% icon "compose" 20 %}
+      </button>
+    </form>
+  </header>
+
+  <main class="ask-messages" id="main" role="log" aria-live="polite" aria-label="Conversation with LifeOS">
+    <div class="ask-messages-inner" id="askMessages">
+      {% if items or polling or failed_job %}
+        {% for item in items %}
+          {% if item.kind == "user" %}
+            {% include "web/_ask_user_bubble.html" with user_text=item.text attachment=item.attachment %}
+          {% else %}
+            {% include "web/_ask_reply_item.html" with item=item %}
+          {% endif %}
+        {% endfor %}
+        {% if polling %}
+          {% include "web/_ask_typing.html" %}
+        {% elif failed_job %}
+          {% include "web/_ask_error.html" with failed_job=failed_job %}
+        {% endif %}
+      {% else %}
+        {% include "web/_ask_empty.html" %}
+      {% endif %}
+    </div>
+  </main>
+
+  <footer class="ask-composer">
+    <div class="ask-composer-inner">
+      <div class="chips ask-chips" aria-label="Suggestions">
+        {% for chip in suggestion_chips %}
+        <button type="button" class="chip" data-ask-prompt="{{ chip }}">{{ chip }}</button>
+        {% endfor %}
+      </div>
+
+      <div class="ask-file-pill" id="askFilePill" hidden>
+        <span class="ask-file-pill-name">{% icon "paperclip" 16 %}<span id="askFileName"></span></span>
+        <button type="button" class="ask-file-clear" id="askFileClear" aria-label="Remove attachment">{% icon "x" 16 %}</button>
+      </div>
+
+      <form method="post" action="{% url 'web:ask_send' %}" enctype="multipart/form-data" class="ask-form" id="askForm" data-ask-send>
+        {% csrf_token %}
+        <div class="ask-attach-wrap">
+          <input type="file"
+                 id="askFile"
+                 name="attachment"
+                 class="visually-hidden"
+                 accept=".pdf,.docx,.md,.markdown,.txt,image/jpeg,image/png,image/webp,image/gif">
+          <label for="askFile" class="icon-btn ask-attach" aria-label="Attach photo or file">
+            {% icon "plus" 20 %}
+          </label>
+        </div>
+        <label for="askInput" class="visually-hidden">Message LifeOS</label>
+        <textarea id="askInput"
+                  name="message"
+                  class="ask-input"
+                  rows="1"
+                  maxlength="8000"
+                  placeholder="Ask LifeOS…"
+                  enterkeyhint="send"></textarea>
+        <button type="submit" class="icon-btn ask-send" id="askSendBtn" aria-label="Send message">
+          {% icon "arrow-up" 20 %}
+        </button>
+      </form>
+    </div>
+  </footer>
+</div>
+{% endblock %}

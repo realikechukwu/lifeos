@@ -1,0 +1,15 @@
+{% load ui %}
+<div class="ask-empty" id="askEmpty">
+  <span class="ask-empty-badge" aria-hidden="true">{% icon "chat" 28 %}</span>
+  <h2 class="ask-empty-title">{{ greeting }}</h2>
+  <p class="ask-empty-sub">Ask about your plans, or tell me what to add. I’ll check with you before changing anything.</p>
+  <div class="ask-starters">
+    {% for prompt in starter_prompts %}
+    <form method="post" action="{% url 'web:ask_send' %}" data-ask-starter-form>
+      {% csrf_token %}
+      <input type="hidden" name="message" value="{{ prompt }}">
+      <button type="submit" class="btn ask-starter" data-ask-prompt="{{ prompt }}">{{ prompt }}</button>
+    </form>
+    {% endfor %}
+  </div>
+</div>

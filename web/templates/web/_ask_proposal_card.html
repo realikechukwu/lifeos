@@ -1,0 +1,45 @@
+{% load ui %}
+<article class="ask-card" id="proposal-{{ card.id }}" data-proposal-card data-proposal-status="{{ card.status }}">
+  <div class="ask-card-head">
+    <span class="tile-icon{% if card.icon_tint %} {{ card.icon_tint }}{% endif %}" aria-hidden="true">{% icon card.icon 20 %}</span>
+    <div class="ask-card-meta">
+      <p class="ask-card-label">{{ card.label }}</p>
+      <h3 class="ask-card-title">{{ card.title }}</h3>
+      {% if card.when %}
+      <p class="ask-card-when tabular">{{ card.when }}</p>
+      {% endif %}
+    </div>
+    {% if card.is_pending %}
+    <form method="post" action="{{ card.cancel_url }}" data-swap="#proposal-{{ card.id }}" class="ask-card-cancel-form">
+      {% csrf_token %}
+      <button type="submit" class="icon-btn plain ask-card-cancel" aria-label="Cancel {{ card.title }}">
+        {% icon "x" 18 %}
+      </button>
+    </form>
+    {% endif %}
+  </div>
+
+  {% if card.extra_lines %}
+  <div class="ask-card-details">
+    {% for line in card.extra_lines %}
+    <p>{{ line }}</p>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if card.is_pending %}
+  <div class="btn-row ask-card-actions">
+    <form method="post" action="{{ card.confirm_url }}" data-swap="#proposal-{{ card.id }}">
+      {% csrf_token %}
+      <button type="submit" class="btn btn-tinted btn-block">{{ card.confirm_label }}</button>
+    </form>
+    <button type="button" class="btn btn-block" data-ask-change="{{ card.change_prompt }}">Change</button>
+  </div>
+  {% elif card.is_confirmed %}
+  <p class="ask-card-status is-ok">{% icon "check" 16 %} {{ card.status_text }}</p>
+  {% elif card.is_failed %}
+  <p class="ask-card-status is-failed">{% icon "alert" 16 %} {{ card.status_text }}</p>
+  {% else %}
+  <p class="ask-card-status">{{ card.status_text }}</p>
+  {% endif %}
+</article>

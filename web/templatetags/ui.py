@@ -7,7 +7,9 @@ from datetime import timedelta
 from django import template
 from django.utils import timezone
 from django.utils.html import format_html
+from django.utils.safestring import mark_safe
 
+from assistant.agent.formatting import to_web_html
 from core.models import AssignedTo, Task
 
 register = template.Library()
@@ -78,3 +80,9 @@ def line_preview(text, length=160):
 def assignee_initial(value):
     """'I', 'W' or 'B' for a task's assignee value; empty when unassigned."""
     return {AssignedTo.IKE: "I", AssignedTo.WIFE: "W", AssignedTo.BOTH: "B"}.get(value, "")
+
+
+@register.filter
+def ask_text(value):
+    """Render assistant plain text safely with **bold** and '• ' lists."""
+    return mark_safe(to_web_html(value or ""))
