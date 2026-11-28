@@ -5,9 +5,10 @@ trial run: it prints where every event would go and changes nothing. With
 --apply it moves each event with Google's move call, so the event keeps its
 ID, LifeOS keeps track of it and no copies are left behind.
 
-Titles and locations that the keyword rules cannot place are sent to the
-OpenAI model LifeOS already uses for extraction; pass --no-ai to skip that and
-leave them personal.
+Events that are not Patchwork shifts and had no category saved when LifeOS
+added them are sorted by the OpenAI model LifeOS already uses for extraction
+(titles and locations only). Pass --no-ai to use the title keyword rules
+instead; anything they cannot place stays personal.
 """
 
 from collections import Counter
@@ -83,23 +84,25 @@ def plan_sort(service, source: str, *, since=None, use_ai=True, overrides=None) 
             row.update(category=WORK, reason="shift")
         elif row["id"] in saved:
             row.update(category=saved[row["id"]], reason="saved")
-        elif guess := guess_category(row["title"], row["location"]):
-            row.update(category=guess, reason="keywords")
         else:
             unplaced.append(row)
         plan.append(row)
 
-    if unplaced:
-        categories = [PERSONAL] * len(unplaced)
-        reason = "default"
-        if use_ai:
-            try:
-                categories = classify_with_ai([{"title": r["title"], "location": r["location"]} for r in unplaced])
-                reason = "ai"
-            except Exception:  # noqa: BLE001 - a trial run should still show the rest of the plan
-                reason = "ai unavailable"
-        for row, category in zip(unplaced, categories):
-            row.update(category=category, reason=reason)
+    # The AI reads the whole title in context, so it goes first; the keyword
+    # rules only fill in when it is switched off or cannot be reached.
+    categories = None
+    if unplaced and use_ai:
+        try:
+            categories = classify_with_ai([{"title": r["title"], "location": r["location"]} for r in unplaced])
+        except Exception:  # noqa: BLE001 - a trial run should still show the rest of the plan
+            categories = None
+    for position, row in enumerate(unplaced):
+        if categories is not None:
+            row.update(category=categories[position], reason="ai")
+        elif guess := guess_category(row["title"], row["location"]):
+            row.update(category=guess, reason="keywords")
+        else:
+            row.update(category=PERSONAL, reason="default")
     plan.sort(key=lambda r: (ORDER.index(r["category"]), r["date"], r["title"].lower()))
     return plan, skipped
 
@@ -206,6 +209,6 @@ class Command(BaseCommand):
                 self.stdout.write(f"  {row['date']}  {row['title']}  ({row['why']})")
         self.stdout.write(
             "\nTotal: " + ", ".join(f"{counts[c]} {c}" for c in ORDER)
-            + ". Reasons: shift = Patchwork shift, saved = chosen when it was added, keywords = title rules, "
-            "ai = sorted by the AI, you = --set."
+            + ". Reasons: shift = Patchwork shift, saved = chosen when it was added, ai = sorted by the AI, "
+            "keywords = title rules (AI off or unavailable), default = nothing matched, you = --set."
         )

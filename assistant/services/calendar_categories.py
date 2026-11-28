@@ -28,8 +28,11 @@ CategoryName = Literal["work", "family", "health", "personal"]
 
 # Shared wording for the email/Telegram extractor and the agent's tool schema.
 CATEGORY_GUIDE = (
-    "Which calendar the event goes on. work: jobs, shifts, rotas, on-call, "
-    "training, exams and other work for either adult. family: nursery, school, "
+    "Which calendar the event goes on. Ike is a doctor, so medical courses, "
+    "teaching, exams, placements, study days, conferences, webinars and calls "
+    "or meetings with colleagues are work; health is only for appointments "
+    "where someone in the household is the patient. work: jobs, shifts, rotas, "
+    "on-call, training, exams and other work for either adult. family: nursery, school, "
     "kids' activities, playdates, family outings, visits and gatherings. "
     "health: GP, dentist, hospital, clinic, optician, physio, pharmacy, "
     "vaccinations and other health appointments for anyone, children included. "
@@ -80,16 +83,19 @@ def separate_calendars_configured() -> bool:
     return any(calendar_id_for(category) != default for category in (WORK, FAMILY, HEALTH))
 
 
-# Deliberately narrow keyword rules. Health is checked before family so a
-# child's dentist appointment is health; work only matches clearly work words.
+# Deliberately narrow keyword rules, a fallback for when the AI gave no
+# category. Work is checked first because Ike is a doctor: a medical course,
+# teaching session or GP placement is work, not a health appointment. Health
+# is checked before family so a child's dentist appointment is health.
 _RULES = (
     (WORK, re.compile(
         r"^ike — |\b(shift|shifts|on[- ]?call|rota|locum|induction|arcp|study day|"
-        r"teaching session|mandatory training|work)\b",
+        r"teach|teaching|course|courses|placement|webinar|conference|cpd|exam|"
+        r"mandatory training|work)\b",
         re.IGNORECASE,
     )),
     (HEALTH, re.compile(
-        r"\b(gp|doctor|doctors|dr|dentist|dental|orthodontist|hospital|clinic|physio|"
+        r"\b(gp|doctor|doctors|dentist|dental|orthodontist|hospital|clinic|physio|"
         r"physiotherapy|optician|opticians|eye test|pharmacy|prescription|vaccine|vaccination|"
         r"vaccinations|immunisation|immunisations|jab|jabs|health visitor|midwife|antenatal|"
         r"blood test|check[- ]?up|therapy|therapist|counselling|nhs)\b",

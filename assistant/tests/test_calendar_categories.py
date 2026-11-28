@@ -63,6 +63,11 @@ class CategoryRoutingTests(TestCase):
             "Dentist for the kids": "health",
             "Nursery parents' evening": "family",
             "Family day out at the zoo": "family",
+            # Ike is a doctor: medical teaching, courses and placements are work.
+            "Teach Cardiology Doctors: atrial fibrillation": "work",
+            "Cardiology Skills Course": "work",
+            "Start GP placement at The Elms Medical Centre": "work",
+            "Zoom call with Dr Pandey": None,
             "Mum's birthday": None,
             "Pay council tax": None,
             "Date night": None,
@@ -282,12 +287,13 @@ class SortCalendarEventsCommandTests(TestCase):
             {"id": "gp-1_20261120", "recurringEventId": "gp-1", "summary": "GP appointment", "start": {"date": "2026-11-20"}},
         ]
 
-    def _run(self, mock_build, *args, ai=("family", "personal")):
+    def _run(self, mock_build, *args, ai=("health", "family", "personal")):
         service = MagicMock()
         service.events.return_value.list.return_value.execute.return_value = {"items": self.items}
         mock_build.return_value = service
         out = StringIO()
-        with patch("assistant.management.commands.sort_calendar_events.classify_with_ai", return_value=list(ai)) as ai_mock:
+        ai_kwargs = {"side_effect": ai} if isinstance(ai, Exception) else {"return_value": list(ai)}
+        with patch("assistant.management.commands.sort_calendar_events.classify_with_ai", **ai_kwargs) as ai_mock:
             call_command("sort_calendar_events", *args, stdout=out)
         return service, out.getvalue(), ai_mock
 
@@ -296,11 +302,13 @@ class SortCalendarEventsCommandTests(TestCase):
 
         service.events.return_value.move.assert_not_called()
         ai_mock.assert_called_once_with([
-            {"title": "Swim", "location": ""}, {"title": "Coffee with Sam", "location": ""},
+            {"title": "GP appointment", "location": ""},
+            {"title": "Swim", "location": ""},
+            {"title": "Coffee with Sam", "location": ""},
         ])
         self.assertIn("WORK (1, moves)", output)
         self.assertIn("Ike — Night — General Medicine  [shift]", output)
-        self.assertIn("GP appointment  [keywords]", output)
+        self.assertIn("GP appointment  [ai]", output)
         self.assertIn("PERSONAL (1, stays on the main calendar)", output)
         self.assertIn("Team dinner  (an invitation from someone else", output)
         self.assertIn("Trial run: nothing was moved", output)
@@ -319,7 +327,7 @@ class SortCalendarEventsCommandTests(TestCase):
         self.assertEqual(PatchworkShift.objects.get().calendar_id, "work-cal")
         self.assertIn("Moved 1 to work, 1 to family, 1 to health.", output)
 
-    def test_set_overrides_a_category_and_no_ai_leaves_the_rest_personal(self, mock_build, _creds):
+    def test_set_overrides_a_category_and_no_ai_uses_the_keyword_rules(self, mock_build, _creds):
         service, _, ai_mock = self._run(mock_build, "--apply", "--no-ai", "--set", "coffee-1=family")
 
         ai_mock.assert_not_called()
@@ -328,6 +336,12 @@ class SortCalendarEventsCommandTests(TestCase):
             for call in service.events.return_value.move.call_args_list
         }
         self.assertEqual(moves, {"shift-1": "work-cal", "gp-1": "health-cal", "coffee-1": "family-cal"})
+
+    def test_keyword_rules_fill_in_when_the_ai_is_unavailable(self, mock_build, _creds):
+        _, output, _ = self._run(mock_build, ai=RuntimeError("OpenAI down"))
+
+        self.assertIn("GP appointment  [keywords]", output)
+        self.assertIn("Swim  [default]", output)
 
     def test_refuses_to_run_before_category_calendars_exist(self, mock_build, _creds):
         with self.settings(GOOGLE_CALENDAR_ID_WORK="", GOOGLE_CALENDAR_ID_FAMILY="", GOOGLE_CALENDAR_ID_HEALTH=""):
