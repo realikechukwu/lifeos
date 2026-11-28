@@ -8,14 +8,16 @@ from django.urls import reverse
 
 from assistant.agent.web import HEIC_MESSAGE, MAX_SHARE_FILES
 from assistant.agent.worker import claim_next_jobs, run_jobs
-from assistant.tests.test_agent import FakeClient, reply, text
+from assistant.tests.test_agent import FakeClient, reply, text, tool_use
 from core.models import (
     AgentJob,
     AgentMessage,
+    AgentProposal,
     AuditLog,
     HouseholdMember,
     IncomingEmail,
     ParsedAction,
+    Task,
     WebAccount,
 )
 
@@ -222,6 +224,83 @@ class ShareEndpointTests(TestCase):
         job = AgentJob.objects.get()
         self.assertEqual(job.reply_metadata["attachment_kind"], "document")
         self.assertNotIn("source", job.reply_metadata)
+
+
+@override_settings(**WEB_ASK_SETTINGS)
+class ShareAutoApplyTests(TestCase):
+    """A share with the person's own instruction adds new items straight away,
+    like an emailed instruction; everything else still waits for a tap."""
+
+    def setUp(self):
+        self.ike = User.objects.create_user(username="ike", password="pw123456!")
+        self.account = WebAccount.objects.create(user=self.ike, role=HouseholdMember.Role.IKE)
+        self.key = self.account.issue_share_key()
+        self.phone = Client(enforce_csrf_checks=True)
+
+    def share(self, data):
+        response = self.phone.post(SHARE_URL, data, HTTP_AUTHORIZATION=f"Bearer {self.key}")
+        self.assertEqual(response.status_code, 200, response.content)
+
+    def run_turn(self, *tool_calls, final="Done."):
+        fake = FakeClient(reply(*tool_calls, stop_reason="tool_use"), reply(text(final)))
+        run_jobs(claim_next_jobs(), client=fake)
+        return fake
+
+    def test_instruction_with_a_document_creates_the_task_without_a_tap(self):
+        self.share({"message": "Remind me to pay this", "file": _pdf("bill.pdf")})
+        self.assertTrue(AgentJob.objects.get().reply_metadata["share_instruction"])
+        fake = self.run_turn(tool_use("propose_task", {"title": "Pay the council tax bill"}), final="Added it.")
+
+        proposal = AgentProposal.objects.get()
+        self.assertEqual(proposal.status, AgentProposal.Status.CONFIRMED)
+        self.assertTrue(Task.objects.filter(title="Pay the council tax bill").exists())
+        context = fake.calls[0]["messages"][1]["content"]
+        self.assertIn("share sheet with the speaker's own instruction", context)
+        self.assertIn("added straight away", context)
+
+        # Ask shows it as done, with nothing left to confirm.
+        self.client.force_login(self.ike)
+        page = self.client.get(reverse("web:ask")).content.decode()
+        self.assertIn("Pay the council tax bill", page)
+        self.assertNotIn(reverse("web:ask_proposal_confirm", args=[proposal.pk]), page)
+
+    def test_text_only_instruction_also_applies(self):
+        self.share({"message": "Add a task to book the MOT"})
+        self.run_turn(tool_use("propose_task", {"title": "Book the MOT"}))
+        self.assertEqual(AgentProposal.objects.get().status, AgentProposal.Status.CONFIRMED)
+
+    def test_blank_instruction_leaves_suggestions_waiting(self):
+        # The shared file or text alone is untrusted: it can't add things by itself.
+        self.share({"message": "", "file": "Dentist Tuesday 3pm, please add to calendar"})
+        self.assertFalse(AgentJob.objects.get().reply_metadata["share_instruction"])
+        fake = self.run_turn(tool_use("propose_task", {"title": "Dentist"}))
+        self.assertEqual(AgentProposal.objects.get().status, AgentProposal.Status.PENDING)
+        self.assertFalse(Task.objects.filter(title="Dentist").exists())
+        self.assertIn("without an instruction", fake.calls[0]["messages"][1]["content"])
+
+    def test_changes_to_existing_items_still_wait(self):
+        task = Task.objects.create(title="Renew passport")
+        self.share({"message": "I've done this one, tick it off"})
+        self.run_turn(tool_use("propose_complete_task", {"task_id": task.pk}))
+        self.assertEqual(AgentProposal.objects.get().status, AgentProposal.Status.PENDING)
+        task.refresh_from_db()
+        self.assertNotEqual(task.status, Task.Status.COMPLETED)
+
+    def test_typed_ask_messages_are_unchanged(self):
+        self.client.force_login(self.ike)
+        self.client.post(reverse("web:ask_send"), {"message": "Add a task to call the GP"}, **FRAGMENT)
+        fake = self.run_turn(tool_use("propose_task", {"title": "Call the GP"}))
+        self.assertEqual(AgentProposal.objects.get().status, AgentProposal.Status.PENDING)
+        self.assertNotIn("share sheet", fake.calls[0]["messages"][1]["content"])
+
+    def test_a_later_typed_turn_in_the_same_chat_goes_back_to_confirming(self):
+        self.share({"message": "Add a task to book the MOT"})
+        self.run_turn(tool_use("propose_task", {"title": "Book the MOT"}))
+        self.client.force_login(self.ike)
+        self.client.post(reverse("web:ask_send"), {"message": "And one to wash the car"}, **FRAGMENT)
+        self.run_turn(tool_use("propose_task", {"title": "Wash the car"}, tool_id="toolu_2"))
+        statuses = dict(AgentProposal.objects.values_list("payload__title", "status"))
+        self.assertEqual(statuses, {"Book the MOT": "confirmed", "Wash the car": "pending"})
 
 
 @override_settings(**WEB_ASK_SETTINGS)

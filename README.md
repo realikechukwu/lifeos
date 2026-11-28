@@ -365,8 +365,12 @@ login linked to a household role.
 - The Shortcut posts to `POST /ask/share/` with the key in the
   `Authorization` header (with or without `Bearer `), a `message` form field
   and one or more `file` fields. The endpoint has no session, so it skips
-  CSRF; a key can only queue messages, and anything the agent proposes still
-  needs a tap in the signed-in app.
+  CSRF; a key can only queue messages.
+- Like an emailed instruction, a share that includes the person's own typed
+  instruction has its new events, tasks, notes and reminders applied straight
+  away. Edits, cancellations and Homebase changes still wait for a tap in Ask,
+  and so does everything from a share with no instruction, since the shared
+  file or text alone is untrusted.
 - Several files shared at once are queued together and answered as one turn.
   Replies are short plain text, which the Shortcut shows as a notification.
 - iPhone camera photos are HEIC, which the agent can't read, so the Shortcut

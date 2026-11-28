@@ -409,7 +409,11 @@ def propose(ctx, args, *, kind):
     if old:
         edit_card(old, ctx.bot)
     ctx.proposal_ids.append(proposal.id)
-    if (ctx.channel == "email" and kind in {*CREATE_TYPES, "complete_task"}) or is_instant_list_edit(kind, payload):
+    if (
+        (ctx.channel == "email" and kind in {*CREATE_TYPES, "complete_task"})
+        or (ctx.auto_apply_creations and kind in CREATE_TYPES)
+        or is_instant_list_edit(kind, payload)
+    ):
         decide(proposal, confirm=True)
         proposal.refresh_from_db()
     return {"proposal_id": proposal.id, "status": proposal.status, "summary": summary(proposal), "result": proposal.result}
