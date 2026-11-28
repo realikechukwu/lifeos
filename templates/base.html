@@ -73,6 +73,7 @@
     </a>
     <button type="button" class="btn btn-primary side-new" data-open-dialog="quickAdd">{% icon "plus" %} New</button>
     <div class="side-foot">
+      <a class="side-link" href="{% url 'web:settings' %}" {% if url_name == 'settings' %}aria-current="page"{% endif %}>{% icon "gear" %} Settings</a>
       {% if user.is_staff %}
         <a class="side-link" href="{% url 'admin:index' %}">{% icon "sliders" %} Admin</a>
       {% endif %}
@@ -148,20 +149,26 @@
   </div>
 </dialog>
 
-<dialog class="sheet" id="accountSheet" aria-labelledby="accountTitle">
-  <div class="sheet-head">
-    <span></span>
-    <h2 class="sheet-title" id="accountTitle">Account</h2>
-    <button type="button" class="btn btn-plain" data-close-dialog>Done</button>
-  </div>
-  <div class="sheet-body">
-    <div class="hstack">
-      <span class="avatar lg" aria-hidden="true">{{ user.get_username|slice:":1" }}</span>
-      <div><p class="row-title strong">{{ user.get_username }}</p><p class="row-sub">Signed in</p></div>
+<dialog class="drawer" id="menuDrawer" aria-labelledby="menuTitle">
+  <div class="drawer-head">
+    <span class="avatar lg" aria-hidden="true">{{ menu_name|slice:":1" }}</span>
+    <div class="drawer-who">
+      <h2 class="row-title strong" id="menuTitle">{{ menu_name }}</h2>
+      <p class="row-sub">Signed in as {{ user.get_username }}</p>
     </div>
+    <button type="button" class="icon-btn" data-close-dialog aria-label="Close menu">{% icon "x" 18 %}</button>
+  </div>
+  <div class="drawer-body">
     <ul class="group sheet-links">
       <li>
-        <a class="row" href="{% url 'web:review_list' %}">
+        <a class="row" href="{% url 'web:settings' %}" {% if url_name == 'settings' %}aria-current="page"{% endif %}>
+          <span class="tile-icon">{% icon "gear" %}</span>
+          <span class="row-main row-title">Settings</span>
+          {% icon "chevron-right" 18 %}
+        </a>
+      </li>
+      <li>
+        <a class="row" href="{% url 'web:review_list' %}" {% if 'review' in url_name %}aria-current="page"{% endif %}>
           <span class="tile-icon warn">{% icon "inbox" %}</span>
           <span class="row-main row-title">Review queue</span>
           {% if pending_review_count %}<span class="count warn">{{ pending_review_count }}</span>{% endif %}
@@ -169,10 +176,16 @@
         </a>
       </li>
       {% if user.is_staff %}
-      <li><a class="row" href="{% url 'admin:index' %}"><span class="tile-icon">{% icon "sliders" %}</span><span class="row-main row-title">Admin</span>{% icon "chevron-right" 18 %}</a></li>
+      <li>
+        <a class="row" href="{% url 'admin:index' %}">
+          <span class="tile-icon">{% icon "sliders" %}</span>
+          <span class="row-main row-title">Admin</span>
+          {% icon "chevron-right" 18 %}
+        </a>
+      </li>
       {% endif %}
     </ul>
-    <form method="post" action="{% url 'logout' %}">
+    <form method="post" action="{% url 'logout' %}" class="drawer-foot">
       {% csrf_token %}
       <button type="submit" class="btn btn-danger btn-lg btn-block">{% icon "logout" %} Log out</button>
     </form>

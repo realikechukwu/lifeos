@@ -20,13 +20,16 @@ def pending_review_count(request):
 
 
 def ask_navigation(request):
-    """Whether the Ask chat screen is enabled and set up for this login."""
-    if not settings.AGENT_WEB_CHAT_ENABLED or not settings.AGENT_ENABLED:
-        return {"ask_available": False}
+    """Whether Ask is set up for this login, and the name the menu shows."""
     user = getattr(request, "user", None)
     if not user or not user.is_authenticated:
         return {"ask_available": False}
-    return {"ask_available": WebAccount.objects.filter(user=user).exists()}
+    from assistant.agent.web import greeting_name
+
+    account = WebAccount.objects.filter(user=user).select_related("user").first()
+    menu_name = (greeting_name(account) if account else "") or user.get_full_name() or user.get_username()
+    available = bool(account) and settings.AGENT_WEB_CHAT_ENABLED and settings.AGENT_ENABLED
+    return {"ask_available": available, "menu_name": menu_name}
 
 
 def site_metadata(request):

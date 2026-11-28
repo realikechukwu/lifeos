@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+{% load ui %}
+{% block title %}Settings — LifeOS{% endblock %}
+
+{% block content %}
+<header class="page-head">
+  {% include "web/_menu_button.html" %}
+  <div>
+    <h1 class="page-title">Settings</h1>
+  </div>
+</header>
+
+<section class="section" aria-labelledby="account-heading">
+  <h2 class="visually-hidden" id="account-heading">Account</h2>
+  <div class="card settings-who">
+    <span class="avatar lg" aria-hidden="true">{{ display_name|slice:":1" }}</span>
+    <div class="row-main">
+      <p class="row-title strong">{{ display_name }}</p>
+      <p class="row-sub">
+        Signed in as {{ user.get_username }}{% if account %} · {{ account.get_role_display }}’s account{% endif %}{% if user.is_staff %} · Admin{% endif %}
+      </p>
+    </div>
+  </div>
+  {% if user.is_staff %}
+  <ul class="group">
+    <li>
+      <a class="row" href="{% url 'admin:index' %}">
+        <span class="tile-icon">{% icon "sliders" %}</span>
+        <span class="row-main"><span class="row-title">Admin</span><span class="row-sub">Household, logins, agent settings</span></span>
+        {% icon "chevron-right" 18 %}
+      </a>
+    </li>
+  </ul>
+  {% endif %}
+</section>
+
+<section class="section" id="share" aria-labelledby="share-heading">
+  <div class="section-head">
+    <h2 class="section-title" id="share-heading">Share from iPhone</h2>
+  </div>
+
+  {% if not share_available %}
+  <div class="notice info">
+    {% icon "alert" %}
+    <div>
+      {% if not account %}
+        Your login isn’t linked to a household role yet, so it can’t send things to Ask. An admin can link it in Django admin under Web accounts.
+      {% else %}
+        Ask is switched off right now, so sharing from iPhone is too.
+      {% endif %}
+    </div>
+  </div>
+  {% else %}
+  <p class="settings-lede">Send a WhatsApp document, a photo or some text straight to your Ask chat from the iPhone share sheet. It uses an Apple Shortcut and a key that only you have.</p>
+
+  {% if new_key %}
+  <div class="card key-reveal" role="status">
+    <p class="row-title strong">{% icon "key" 18 %} Your new share key</p>
+    <p class="row-sub">Copy it into the Shortcut now. For your safety it won’t be shown again.</p>
+    <div class="copy-field">
+      <label class="visually-hidden" for="newShareKey">Share key</label>
+      <input class="input mono" id="newShareKey" value="{{ new_key }}" readonly autocomplete="off" autocorrect="off" spellcheck="false">
+      <button type="button" class="btn btn-primary" data-copy="#newShareKey">{% icon "copy" 18 %} Copy</button>
+    </div>
+  </div>
+  {% endif %}
+
+  <ul class="group">
+    <li class="row">
+      <span class="tile-icon{% if account.has_share_key %} ok{% endif %}">{% icon "key" %}</span>
+      <span class="row-main">
+        {% if account.has_share_key %}
+          <span class="row-title">Key ending …{{ account.share_key_hint }}</span>
+          <span class="row-sub">
+            Made {{ account.share_key_created_at|date:"j M Y" }} ·
+            {% if account.share_key_last_used_at %}last used {{ account.share_key_last_used_at|timesince }} ago{% else %}not used yet{% endif %}
+          </span>
+        {% else %}
+          <span class="row-title">No key yet</span>
+          <span class="row-sub">Make one to set up the Shortcut.</span>
+        {% endif %}
+      </span>
+    </li>
+  </ul>
+
+  <div class="btn-row">
+    <form method="post" action="{% url 'web:share_key_create' %}"
+          {% if account.has_share_key %}data-confirm="Make a new key? The Shortcut stops working until you paste the new key into it."{% endif %}>
+      {% csrf_token %}
+      <button type="submit" class="btn {% if account.has_share_key %}btn-tinted{% else %}btn-primary{% endif %} btn-block">
+        {% icon "key" 18 %} {% if account.has_share_key %}Make a new key{% else %}Make a key{% endif %}
+      </button>
+    </form>
+    {% if account.has_share_key %}
+    <form method="post" action="{% url 'web:share_key_revoke' %}" data-confirm="Turn off sharing from iPhone? The Shortcut stops working until you make a new key.">
+      {% csrf_token %}
+      <button type="submit" class="btn btn-danger btn-block">Turn off</button>
+    </form>
+    {% endif %}
+  </div>
+
+  <details class="card setup"{% if new_key %} open{% endif %}>
+    <summary class="setup-summary">
+      <span class="tile-icon teal">{% icon "share" %}</span>
+      <span class="row-main row-title">Set up the Shortcut</span>
+      <span class="chev">{% icon "chevron-down" 18 %}</span>
+    </summary>
+    <div class="setup-body">
+      <p>About five minutes, once per iPhone. You need your key and this address:</p>
+      <div class="copy-field">
+        <label class="visually-hidden" for="shareUrl">Share address</label>
+        <input class="input mono" id="shareUrl" value="{{ share_url }}" readonly autocomplete="off" autocorrect="off" spellcheck="false">
+        <button type="button" class="btn btn-tinted" data-copy="#shareUrl">{% icon "copy" 18 %} Copy</button>
+      </div>
+      <ol class="steps">
+        <li>Open <strong>Shortcuts</strong>, tap <strong>+</strong> and name the new shortcut <strong>Send to LifeOS</strong>.</li>
+        <li>Tap the <strong>ⓘ</strong> button and turn on <strong>Show in Share Sheet</strong>. Then tap the blue <strong>Any</strong> in the first action and keep only <strong>Files</strong>, <strong>Images</strong>, <strong>PDFs</strong> and <strong>Text</strong>.</li>
+        <li>Add <strong>Ask for Input</strong>. Set the prompt to <em>What should LifeOS do with this?</em> You can leave the answer blank when you use it.</li>
+        <li>Add <strong>Repeat with Each</strong> and set it to <strong>Shortcut Input</strong>. Inside the repeat:
+          <ol>
+            <li>Add <strong>Get Details of Files</strong> and set it to get the <strong>File Extension</strong> of <strong>Repeat Item</strong>.</li>
+            <li>Add <strong>If</strong>: <strong>File Extension</strong> <strong>is</strong> <code>heic</code>.</li>
+            <li>Under <strong>If</strong>, add <strong>Convert Image</strong> (<strong>Repeat Item</strong> to <strong>JPEG</strong>), then <strong>Add to Variable</strong> with the converted image and the variable name <code>Items</code>.</li>
+            <li>Under <strong>Otherwise</strong>, add <strong>Add to Variable</strong> with <strong>Repeat Item</strong> and the variable name <code>Items</code>.</li>
+          </ol>
+          iPhone camera photos are HEIC, which LifeOS can’t read, so this turns them into JPEGs and leaves everything else alone.
+        </li>
+        <li>After <strong>End Repeat</strong>, add <strong>Get Contents of URL</strong> and paste the address above. Tap <strong>›</strong> to show more options, then:
+          <ul>
+            <li>Method: <strong>POST</strong>.</li>
+            <li>Headers: add <code>Authorization</code>, and paste your key as its value.</li>
+            <li>Request Body: <strong>Form</strong>. Add a <strong>Text</strong> field called <code>message</code> set to <strong>Provided Input</strong>, and a <strong>File</strong> field called <code>file</code> set to the <code>Items</code> variable.</li>
+          </ul>
+        </li>
+        <li>Add <strong>Show Notification</strong> and set it to <strong>Contents of URL</strong>. That shows “Sent to LifeOS” or what went wrong.</li>
+      </ol>
+      <p>To use it, tap <strong>Share</strong> on a document, photo or message, then choose <strong>Send to LifeOS</strong>. The reply appears in your Ask chat, and anything that changes the calendar or tasks still waits for you to confirm it there.</p>
+      <p class="row-sub">To give the Shortcut to someone else, duplicate it and clear the <code>Authorization</code> value before you share the copy. They make their own key here when signed in as themselves.</p>
+    </div>
+  </details>
+  {% endif %}
+</section>
+
+<form method="post" action="{% url 'logout' %}" class="settings-logout">
+  {% csrf_token %}
+  <button type="submit" class="btn btn-danger btn-lg btn-block">{% icon "logout" %} Log out</button>
+</form>
+{% endblock %}

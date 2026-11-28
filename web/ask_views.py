@@ -132,12 +132,24 @@ def _message_blocks(message: AgentMessage) -> list:
     return message.content if isinstance(message.content, list) else []
 
 
+def _attachment_label(names: list[str], photos: int) -> str:
+    """"letter.pdf", "Photo", or "letter.pdf, form.docx, 2 photos"."""
+    parts = list(names)
+    if photos == 1:
+        parts.append("Photo")
+    elif photos > 1:
+        parts.append(f"{photos} photos")
+    return ", ".join(parts)
+
+
 def _extract_user_display(blocks: list) -> tuple[str, str]:
     """Return (visible text, attachment label) for a stored user message, or ('', '') for tool results."""
     if not blocks or all(isinstance(b, dict) and b.get("type") == "tool_result" for b in blocks):
         return "", ""
     first_text = ""
-    attachment = ""
+    names: list[str] = []
+    photos = 0
+    pdf_without_name = 0
     for block in blocks:
         if not isinstance(block, dict):
             continue
@@ -145,18 +157,20 @@ def _extract_user_display(blocks: list) -> tuple[str, str]:
         if btype == "text":
             raw = str(block.get("text") or "").strip()
             if raw.startswith("Untrusted uploaded document: "):
-                attachment = raw.removeprefix("Untrusted uploaded document: ").strip()
+                names.append(raw.removeprefix("Untrusted uploaded document: ").strip())
             elif raw == "Untrusted photo sent by the speaker:":
-                attachment = attachment or "Photo"
+                continue
             elif raw.startswith("Untrusted ") and "extracted text:" in raw:
                 continue
             elif not first_text:
                 first_text = raw
-        elif btype == "image" and not attachment:
-            attachment = "Photo"
-        elif btype == "document" and not attachment:
-            attachment = "PDF document"
-    return first_text, attachment
+        elif btype == "image":
+            photos += 1
+        elif btype == "document" and not names:
+            pdf_without_name += 1
+    if not names and pdf_without_name:
+        names = ["PDF document"]
+    return first_text, _attachment_label(names, photos)
 
 
 def _extract_assistant_display(message: AgentMessage, blocks: list) -> str:
@@ -510,6 +524,35 @@ def _active_web_job(user, *, include_text: bool = False) -> AgentJob | None:
     return qs.order_by("-id").first()
 
 
+def _pending_bubble(user) -> dict:
+    """One bubble for every message still waiting for the worker.
+
+    The worker answers a person's queued messages as one turn, so they are
+    shown together, the way the timeline shows them once recorded: several
+    files shared from iPhone at once appear as one bubble, not just the last.
+    """
+    jobs = list(
+        AgentJob.objects.filter(
+            channel=AgentThread.Channel.WEB,
+            web_user=user,
+            thread__isnull=True,
+            status__in=[AgentJob.Status.QUEUED, AgentJob.Status.RUNNING],
+        )
+        .only("text", "reply_metadata")
+        .order_by("id")
+    )
+    texts = [
+        job.text for job in jobs
+        if job.text.strip() and not job.reply_metadata.get("share_part")
+    ]
+    names = [
+        job.reply_metadata["attachment_name"] for job in jobs
+        if job.reply_metadata.get("attachment_kind") == "document" and job.reply_metadata.get("attachment_name")
+    ]
+    photos = sum(1 for job in jobs if job.reply_metadata.get("attachment_kind") == "image")
+    return {"text": "\n\n".join(texts), "attachment": _attachment_label(names, photos)}
+
+
 def _latest_failed_job(user, thread: AgentThread | None) -> AgentJob | None:
     """Return the latest web job if it failed on the current conversation."""
     latest = (
@@ -560,13 +603,10 @@ def ask_page(request):
         thread = open_thread_for(request.user)
 
     items, last_message_id = _build_timeline(thread)
-    if active_job and active_job.thread_id is None and (active_job.text or active_job.reply_metadata.get("attachment_name")):
-        items.append({
-            "kind": "user",
-            "id": None,
-            "text": active_job.text,
-            "attachment": active_job.reply_metadata.get("attachment_name", ""),
-        })
+    if active_job and active_job.thread_id is None:
+        pending = _pending_bubble(request.user)
+        if pending["text"] or pending["attachment"]:
+            items.append({"kind": "user", "id": None, **pending})
     failed_job = None if active_job else _latest_failed_job(request.user, thread)
 
     return render(request, "web/ask.html", {

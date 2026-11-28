@@ -344,6 +344,34 @@ landing page is **Upcoming**.
   remains available within the current month. The Today strip stays available on
   empty days. Calendar and details use the app timezone and 24-hour times; sent
   reminders and completed tasks retain their status as history.
+- **Menu and Settings** — on phones the ☰ button opens a drawer with the
+  signed-in name, Settings, the review queue and (for staff) Admin; on wide
+  screens the same links sit at the foot of the sidebar. **Settings**
+  (`/settings/`) holds the share key described below.
+
+### Share from iPhone
+
+An Apple Shortcut in the iPhone share sheet can send a WhatsApp document, a
+photo or some text, with an optional instruction, straight to the sender's
+**Ask** chat. It needs `AGENT_ENABLED` and `AGENT_WEB_CHAT_ENABLED` (plus
+`AGENT_PHOTOS_ENABLED` / `AGENT_DOCUMENTS_ENABLED` for photos and files), and a
+login linked to a household role.
+
+- Each person makes their own key under **Settings → Share from iPhone**. Only
+  a SHA-256 hash is stored; the key is shown once, and making a new key or
+  pressing **Turn off** stops the old one working.
+- The Shortcut posts to `POST /ask/share/` with the key in the
+  `Authorization` header (with or without `Bearer `), a `message` form field
+  and one or more `file` fields. The endpoint has no session, so it skips
+  CSRF; a key can only queue messages, and anything the agent proposes still
+  needs a tap in the signed-in app.
+- Several files shared at once are queued together and answered as one turn.
+  Replies are short plain text, which the Shortcut shows as a notification.
+- iPhone camera photos are HEIC, which the agent can't read, so the Shortcut
+  converts them to JPEG; the endpoint explains the problem if one gets through.
+  Settings has step-by-step instructions for building the Shortcut.
+- nginx must accept the larger bodies: the example config now sets
+  `client_max_body_size 40m`.
 
 ### Patchwork work-shift sync
 

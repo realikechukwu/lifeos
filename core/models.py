@@ -1,4 +1,6 @@
+import hashlib
 import json
+import secrets
 from datetime import time
 
 from cryptography.fernet import Fernet, InvalidToken
@@ -704,9 +706,17 @@ class WebAccount(models.Model):
         IKE = HouseholdMember.Role.IKE, "Ike"
         WIFE = HouseholdMember.Role.WIFE, "Wife"
 
+    SHARE_KEY_PREFIX = "lifeos_"
+
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="web_account")
     role = models.CharField(max_length=20, choices=Role.choices)
     display_name = models.CharField(max_length=255, blank=True, default="")
+    # The iPhone Shortcut's key. Only a SHA-256 hash is kept: the key itself
+    # is shown once, when it is made, and can only queue messages into Ask.
+    share_key_hash = models.CharField(max_length=64, blank=True, default="", db_index=True)
+    share_key_hint = models.CharField(max_length=8, blank=True, default="")
+    share_key_created_at = models.DateTimeField(null=True, blank=True)
+    share_key_last_used_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -715,6 +725,51 @@ class WebAccount(models.Model):
 
     def __str__(self):
         return f"{self.user.get_username()} ({self.get_role_display()})"
+
+    @staticmethod
+    def hash_share_key(raw: str) -> str:
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    @property
+    def has_share_key(self) -> bool:
+        return bool(self.share_key_hash)
+
+    def issue_share_key(self) -> str:
+        """Make a new share key, replacing any old one, and return it once."""
+        from django.utils import timezone
+
+        raw = self.SHARE_KEY_PREFIX + secrets.token_urlsafe(32)
+        self.share_key_hash = self.hash_share_key(raw)
+        self.share_key_hint = raw[-4:]
+        self.share_key_created_at = timezone.now()
+        self.share_key_last_used_at = None
+        self.save(update_fields=[
+            "share_key_hash", "share_key_hint", "share_key_created_at",
+            "share_key_last_used_at", "updated_at",
+        ])
+        return raw
+
+    def revoke_share_key(self) -> None:
+        self.share_key_hash = ""
+        self.share_key_hint = ""
+        self.share_key_created_at = None
+        self.share_key_last_used_at = None
+        self.save(update_fields=[
+            "share_key_hash", "share_key_hint", "share_key_created_at",
+            "share_key_last_used_at", "updated_at",
+        ])
+
+    @classmethod
+    def for_share_key(cls, raw: str):
+        """The account a share key belongs to, or None."""
+        raw = (raw or "").strip()
+        if not raw.startswith(cls.SHARE_KEY_PREFIX) or len(raw) > 200:
+            return None
+        return (
+            cls.objects.filter(share_key_hash=cls.hash_share_key(raw))
+            .select_related("user")
+            .first()
+        )
 
 
 class AgentThread(models.Model):

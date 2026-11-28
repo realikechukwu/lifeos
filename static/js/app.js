@@ -10,6 +10,8 @@
  *   <form data-live="#target">   GET form: re-fetches #target as you type.
  *   <button data-open-dialog="id">   opens <dialog id="id"> as a modal.
  *   <button data-close-dialog>       closes the dialog it sits in.
+ *   <form data-confirm="Question?">  asks before submitting.
+ *   <button data-copy="#input">      copies that input's value.
  */
 (function () {
   "use strict";
@@ -176,12 +178,45 @@
     return event.clientX < rect.left || event.clientX > rect.right ||
       event.clientY < rect.top || event.clientY > rect.bottom;
   }
-  document.querySelectorAll("dialog.sheet").forEach(function (dialog) {
+  document.querySelectorAll("dialog.sheet, dialog.drawer").forEach(function (dialog) {
     var pressedOutside = false;
     dialog.addEventListener("pointerdown", function (event) { pressedOutside = outside(event, dialog); });
     dialog.addEventListener("pointerup", function (event) {
       if (pressedOutside && outside(event, dialog)) dialog.close();
     });
+  });
+
+  // Confirm before a destructive form submits --------------------------------
+
+  document.addEventListener("submit", function (event) {
+    var form = event.target.closest("form[data-confirm]");
+    if (form && !window.confirm(form.dataset.confirm)) event.preventDefault();
+  }, true);
+
+  // Copy a read-only value -------------------------------------------------------
+
+  document.addEventListener("click", function (event) {
+    var button = event.target.closest("[data-copy]");
+    if (!button) return;
+    var field = document.querySelector(button.dataset.copy);
+    if (!field) return;
+    function done() {
+      var label = button.lastChild;
+      var original = label.textContent;
+      label.textContent = " Copied";
+      window.setTimeout(function () { label.textContent = original; }, 2000);
+    }
+    function fallback() {
+      field.focus();
+      field.select();
+      field.setSelectionRange(0, field.value.length);
+      try { if (document.execCommand("copy")) done(); } catch (e) { /* the text stays selected to copy by hand */ }
+    }
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(field.value).then(done, fallback);
+    } else {
+      fallback();
+    }
   });
 
   // Server-rendered messages and highlighted rows --------------------------------

@@ -325,6 +325,20 @@ button { cursor: pointer; }
   margin-bottom: -12px;
 }
 .page-head > div { min-width: 0; }
+/* Phones: the menu button sits on its own row above the large title, the
+   way iOS places navigation buttons; the sidebar replaces it on wide screens. */
+.menu-btn { color: var(--text); }
+@media (max-width: 899px) {
+  .page-head:has(> .menu-btn) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: end;
+    row-gap: 2px;
+    padding-top: 0;
+  }
+  .menu-btn { grid-column: 1 / -1; justify-self: start; margin: -6px 0 0 -10px; }
+}
+@media (min-width: 900px) { .page-head > .menu-btn { display: none; } }
 .overline {
   font-size: 13px;
   line-height: 16px;
@@ -887,6 +901,77 @@ dialog::backdrop { background: rgb(0 0 0 / 0.4); overflow: hidden; overscroll-be
 }
 .sheet-links .row { min-height: 52px; }
 
+dialog.drawer {
+  width: min(86vw, 340px);
+  max-width: none;
+  height: 100dvh;
+  max-height: none;
+  margin: 0 auto 0 0;
+  padding: 0;
+  border: 0;
+  border-right: 1px solid var(--sep);
+  border-radius: 0 22px 22px 0;
+  background: var(--bg);
+  color: var(--text);
+  box-shadow: var(--shadow-lg);
+}
+dialog.drawer[open] { display: flex; flex-direction: column; }
+.drawer-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: calc(env(safe-area-inset-top) + 20px) 12px 12px 16px;
+}
+.drawer-who { flex: 1; min-width: 0; }
+.drawer-who .row-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.drawer-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 8px 16px calc(env(safe-area-inset-bottom) + 20px);
+  overflow-y: auto;
+}
+.drawer-body .row[aria-current="page"] .row-title { color: var(--accent); font-weight: 600; }
+.drawer-foot { margin-top: auto; }
+
+/* Settings */
+.settings-who { display: flex; align-items: center; gap: 12px; }
+.settings-lede { padding: 0 4px; font-size: 15px; color: var(--text-2); }
+.settings-logout { margin-top: 8px; }
+.key-reveal { display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--accent); }
+.key-reveal .row-title { display: flex; align-items: center; gap: 6px; }
+.copy-field { display: flex; gap: 8px; align-items: center; }
+.copy-field .input { flex: 1; min-width: 0; }
+.input.mono, code { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+.input.mono { font-size: 14px; }
+code { padding: 1px 5px; border-radius: 6px; background: var(--fill); font-size: 0.9em; }
+details.setup { padding: 0; }
+.setup-summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 56px;
+  padding: 10px 16px;
+  list-style: none;
+  cursor: pointer;
+}
+.setup-summary::-webkit-details-marker { display: none; }
+details.setup[open] .chev { transform: rotate(180deg); }
+.setup-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 0 16px 16px;
+  font-size: 15px;
+  line-height: 1.5;
+}
+.steps { margin: 0; padding-left: 22px; }
+.steps > li + li { margin-top: 10px; }
+.steps ol, .steps ul { margin: 6px 0; padding-left: 20px; }
+.steps ol > li + li, .steps ul > li + li { margin-top: 4px; }
+.steps ul > li { list-style: disc; }
+
 /* 10. Calendar ---------------------------------------------------------------- */
 
 .calendar-card {
@@ -1243,9 +1328,11 @@ body.is-ask .toasts {
 @media (prefers-reduced-motion: no-preference) {
   @view-transition { navigation: auto; }
   dialog.sheet[open] { animation: sheet-in 0.28s var(--ease); }
+  dialog.drawer[open] { animation: drawer-in 0.28s var(--ease); }
   .toast { animation: toast-in 0.24s var(--ease); }
 }
 @keyframes sheet-in { from { transform: translateY(32px); opacity: 0; } }
+@keyframes drawer-in { from { transform: translateX(-100%); } }
 @keyframes toast-in { from { transform: translateY(12px); opacity: 0; } }
 
 @media (prefers-reduced-motion: reduce) {
