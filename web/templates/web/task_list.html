@@ -4,13 +4,13 @@
 
 {% block content %}
 <header class="page-head">
-  {% include "web/_menu_button.html" %}
   <div>
     <h1 class="page-title">Tasks</h1>
   </div>
   {% if ask_available %}
   <button type="button" class="icon-btn" data-open-dialog="quickAdd" aria-haspopup="dialog" aria-label="New task or note">{% icon "plus" 20 %}</button>
   {% endif %}
+  {% include "web/_menu_button.html" %}
 </header>
 
 <div class="toolbar">

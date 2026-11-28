@@ -151,27 +151,65 @@
 
 <dialog class="drawer" id="menuDrawer" aria-labelledby="menuTitle">
   <div class="drawer-head">
-    <span class="avatar lg" aria-hidden="true">{{ menu_name|slice:":1" }}</span>
+    <span class="drawer-avatar" aria-hidden="true">{{ menu_name|slice:":1" }}</span>
     <div class="drawer-who">
-      <h2 class="row-title strong" id="menuTitle">{{ menu_name }}</h2>
+      <h2 class="drawer-name" id="menuTitle">{{ menu_name }}</h2>
       <p class="row-sub">Signed in as {{ user.get_username }}</p>
     </div>
     <button type="button" class="icon-btn" data-close-dialog aria-label="Close menu">{% icon "x" 18 %}</button>
   </div>
   <div class="drawer-body">
+    <nav aria-label="Apps">
+      <ul class="app-grid">
+        <li style="--i: 0">
+          <a class="app-tile" href="{% url 'web:upcoming' %}" {% if url_name == 'upcoming' %}aria-current="page"{% endif %}>
+            <span class="app-icon app-today">{% icon "home" 26 %}</span>
+            <span class="app-label">Today</span>
+          </a>
+        </li>
+        <li style="--i: 1">
+          <a class="app-tile" href="{% url 'web:calendar' %}" {% if url_name == 'calendar' %}aria-current="page"{% endif %}>
+            <span class="app-icon app-calendar">{% icon "calendar" 26 %}</span>
+            <span class="app-label">Calendar</span>
+          </a>
+        </li>
+        {% if ask_available %}
+        <li style="--i: 2">
+          <a class="app-tile" href="{% url 'web:ask' %}">
+            <span class="app-icon app-ask">{% icon "chat" 26 %}</span>
+            <span class="app-label">Ask</span>
+          </a>
+        </li>
+        {% endif %}
+        <li style="--i: 3">
+          <a class="app-tile" href="{% url 'web:task_list' %}" {% if 'task' in url_name %}aria-current="page"{% endif %}>
+            <span class="app-icon app-tasks">{% icon "tasks" 26 %}</span>
+            <span class="app-label">Tasks</span>
+          </a>
+        </li>
+        <li style="--i: 4">
+          <a class="app-tile" href="{% url 'web:note_list' %}" {% if 'note' in url_name %}aria-current="page"{% endif %}>
+            <span class="app-icon app-notes">{% icon "note" 26 %}</span>
+            <span class="app-label">Notes</span>
+          </a>
+        </li>
+        <li style="--i: 5">
+          <a class="app-tile" href="{% url 'web:review_list' %}" {% if 'review' in url_name %}aria-current="page"{% endif %}>
+            <span class="app-icon app-review">
+              {% icon "inbox" 26 %}
+              {% if pending_review_count %}<span class="app-badge" aria-hidden="true">{{ pending_review_count }}</span>{% endif %}
+            </span>
+            <span class="app-label">Review{% if pending_review_count %}<span class="visually-hidden">, {{ pending_review_count }} waiting</span>{% endif %}</span>
+          </a>
+        </li>
+      </ul>
+    </nav>
+
     <ul class="group sheet-links">
       <li>
         <a class="row" href="{% url 'web:settings' %}" {% if url_name == 'settings' %}aria-current="page"{% endif %}>
           <span class="tile-icon">{% icon "gear" %}</span>
           <span class="row-main row-title">Settings</span>
-          {% icon "chevron-right" 18 %}
-        </a>
-      </li>
-      <li>
-        <a class="row" href="{% url 'web:review_list' %}" {% if 'review' in url_name %}aria-current="page"{% endif %}>
-          <span class="tile-icon warn">{% icon "inbox" %}</span>
-          <span class="row-main row-title">Review queue</span>
-          {% if pending_review_count %}<span class="count warn">{{ pending_review_count }}</span>{% endif %}
           {% icon "chevron-right" 18 %}
         </a>
       </li>
@@ -185,6 +223,7 @@
       </li>
       {% endif %}
     </ul>
+
     <form method="post" action="{% url 'logout' %}" class="drawer-foot">
       {% csrf_token %}
       <button type="submit" class="btn btn-danger btn-lg btn-block">{% icon "logout" %} Log out</button>

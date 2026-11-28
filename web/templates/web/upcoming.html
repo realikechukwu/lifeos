@@ -4,11 +4,11 @@
 
 {% block content %}
 <header class="page-head">
-  {% include "web/_menu_button.html" %}
   <div>
     <p class="overline">{% now "l j F" %}</p>
     <h1 class="page-title">Today</h1>
   </div>
+  {% include "web/_menu_button.html" %}
 </header>
 
 {% if attention_items %}

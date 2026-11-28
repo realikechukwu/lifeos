@@ -9,7 +9,15 @@ from django.urls import reverse
 from assistant.agent.web import HEIC_MESSAGE, MAX_SHARE_FILES
 from assistant.agent.worker import claim_next_jobs, run_jobs
 from assistant.tests.test_agent import FakeClient, reply, text
-from core.models import AgentJob, AgentMessage, AuditLog, HouseholdMember, WebAccount
+from core.models import (
+    AgentJob,
+    AgentMessage,
+    AuditLog,
+    HouseholdMember,
+    IncomingEmail,
+    ParsedAction,
+    WebAccount,
+)
 
 from .test_ask import FRAGMENT, WEB_ASK_SETTINGS, _minimal_pdf_bytes
 
@@ -313,6 +321,36 @@ class MenuDrawerTests(TestCase):
         self.assertIn("Signed in as ike", drawer)
         self.assertIn(reverse("web:settings"), drawer)
         self.assertIn(reverse("admin:index"), drawer)
+        for name in ["web:upcoming", "web:calendar", "web:ask", "web:task_list", "web:note_list", "web:review_list"]:
+            self.assertIn(f'href="{reverse(name)}"', drawer, name)
+        # The tile for the page you're on is marked as current.
+        tasks_page = self.client.get(reverse("web:task_list")).content.decode()
+        tasks_drawer = tasks_page.split('id="menuDrawer"', 1)[1].split("</dialog>", 1)[0]
+        self.assertRegex(tasks_drawer, r'href="/tasks/"\s+aria-current="page"')
+
+    def test_drawer_review_tile_shows_the_waiting_count(self):
+        ParsedAction.objects.create(
+            incoming_email=IncomingEmail.objects.create(
+                gmail_message_id="msg-drawer-1", outer_sender="ike@example.com", subject="Please add a task",
+            ),
+            action_type=ParsedAction.ActionType.CREATE_TASK,
+            title="Renew passport",
+            status=ParsedAction.Status.PENDING_REVIEW,
+            confidence=0.5,
+        )
+        self.client.force_login(self.ike)
+        page = self.client.get(reverse("web:upcoming")).content.decode()
+        drawer = page.split('id="menuDrawer"', 1)[1].split("</dialog>", 1)[0]
+        self.assertIn('class="app-badge"', drawer)
+        self.assertIn("1 waiting", drawer)
+
+    @override_settings(AGENT_WEB_CHAT_ENABLED=False)
+    def test_drawer_leaves_out_ask_when_it_is_off(self):
+        self.client.force_login(self.ike)
+        page = self.client.get(reverse("web:upcoming")).content.decode()
+        drawer = page.split('id="menuDrawer"', 1)[1].split("</dialog>", 1)[0]
+        self.assertNotIn("app-ask", drawer)
+        self.assertIn("app-tasks", drawer)
 
     def test_drawer_hides_admin_from_non_staff_and_uses_their_name(self):
         self.client.force_login(self.wife)
