@@ -1,6 +1,6 @@
 from django.urls import path
 
-from . import ask_views, views
+from . import ask_views, settings_views, share_views, views
 
 app_name = "web"
 
@@ -12,6 +12,7 @@ urlpatterns = [
 
     path("ask/", ask_views.ask_page, name="ask"),
     path("ask/send/", ask_views.ask_send, name="ask_send"),
+    path("ask/share/", share_views.ask_share, name="ask_share"),
     path("ask/updates/", ask_views.ask_updates, name="ask_updates"),
     path("ask/new/", ask_views.ask_new, name="ask_new"),
     path("ask/retry/<int:pk>/", ask_views.ask_retry, name="ask_retry"),
@@ -39,6 +40,10 @@ urlpatterns = [
 
     path("review/", views.review_list, name="review_list"),
     path("review/<int:pk>/", views.review_detail, name="review_detail"),
+
+    path("settings/", settings_views.settings_page, name="settings"),
+    path("settings/share-key/", settings_views.share_key_create, name="share_key_create"),
+    path("settings/share-key/revoke/", settings_views.share_key_revoke, name="share_key_revoke"),
 
     path("healthz/", views.healthz, name="healthz"),
     path("health/", views.health, name="health"),

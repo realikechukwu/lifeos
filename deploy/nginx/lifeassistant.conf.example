@@ -26,7 +26,9 @@ server {
     listen [::]:80;
     server_name <YOUR_DOMAIN>;
 
-    client_max_body_size 5m;
+    # Ask uploads: photos up to 5 MB, documents up to 10 MB, and the iPhone
+    # Shortcut can send several at once.
+    client_max_body_size 40m;
 
     location = /favicon.ico { access_log off; log_not_found off; }
 
@@ -66,7 +68,7 @@ server {
 #     include /etc/letsencrypt/options-ssl-nginx.conf;
 #     ssl_dhparam /etc/letsencrypt/ssl-dhparam.pem;
 #
-#     client_max_body_size 5m;
+#     client_max_body_size 40m;
 #
 #     location /static/ {
 #         alias <PROJECT_PATH>/staticfiles/;
