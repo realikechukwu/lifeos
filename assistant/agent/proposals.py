@@ -21,6 +21,7 @@ from assistant.services.extractor import (
     AssistantAction, build_recurrence, combine_date_and_time, parse_24h_time, parse_iso_date,
 )
 from assistant.services import google_calendar, notes, router, tasks, telegram_inbox
+from assistant.services.calendar_categories import managed_calendar_ids
 from assistant.services.reminders import evaluate_reminder_fields
 from assistant.services.telegram import TelegramAPIError
 from .formatting import to_telegram_html
@@ -44,6 +45,7 @@ CREATE_FIELDS = {
     "create_event": COMMON_FIELDS | REMINDER_FIELDS | RECURRENCE_FIELDS | {
         "appointment_date", "start_time", "end_time", "all_day", "location",
         "meeting_url", "organiser", "booking_reference", "reminder_lead_days",
+        "calendar_category",
     },
     "create_task": COMMON_FIELDS | {"due_date", "due_time", "assigned_to"},
     "create_note": COMMON_FIELDS | {"note_category"},
@@ -267,7 +269,7 @@ def validate_payload(kind, args):
                 raise ToolInputError("Choose ike, wife, both, or unassigned.")
     elif kind in {"reschedule_event", "cancel_event"}:
         event = _record(CalendarEventRecord, args.get("event_id"), "event_id")
-        if event.recurrence_rule or not event.google_event_id or event.calendar_id != settings.GOOGLE_CALENDAR_ID:
+        if event.recurrence_rule or not event.google_event_id or event.calendar_id not in managed_calendar_ids():
             raise ToolInputError("Only LifeOS-owned one-off events on the shared calendar can be changed.")
         data["title"] = event.title
         if kind == "reschedule_event":
@@ -316,7 +318,7 @@ def summary(proposal):
         return "\n".join(lines + summary_lines(proposal.kind, p))[:3300]
     for key, label in (
         ("appointment_date", "Date"), ("start_time", "Start"), ("end_time", "End"),
-        ("location", "Location"), ("meeting_url", "Meeting link"),
+        ("location", "Location"), ("meeting_url", "Meeting link"), ("calendar_category", "Calendar"),
         ("assigned_to", "For"), ("due_date", "Due"), ("reminder_date", "Reminder date"),
         ("reminder_time", "Reminder time"), ("reminder_recipient", "Reminder for"),
         ("reminder_lead_days", "Reminder days before"), ("recurrence_frequency", "Repeats"),
@@ -585,6 +587,8 @@ def _compact(name, prop):
     variants = [v for v in prop.get("anyOf", [prop]) if v.get("type") != "null"]
     nullable = len(variants) < len(prop.get("anyOf", []))
     compact = {k: v for k, v in variants[0].items() if k not in {"title", "default"}}
+    if prop.get("description"):
+        compact.setdefault("description", prop["description"])
     if nullable:
         compact["type"] = [compact["type"], "null"]
         if "enum" in compact:

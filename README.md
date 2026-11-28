@@ -385,12 +385,46 @@ login linked to a household role.
 - nginx must accept the larger bodies: the example config now sets
   `client_max_body_size 40m`.
 
+### Colour-coded calendars
+
+Apple Calendar on the iPhone colours events by calendar and ignores Google's
+per-event colours, so LifeOS can keep each kind of event on its own Google
+calendar:
+
+| Category | Setting | Examples |
+| --- | --- | --- |
+| Work | `GOOGLE_CALENDAR_ID_WORK` | Patchwork shifts, rotas, on-call, training |
+| Family | `GOOGLE_CALENDAR_ID_FAMILY` | Nursery, school, kids' activities, outings |
+| Health | `GOOGLE_CALENDAR_ID_HEALTH` | GP, dentist, hospital, vaccinations |
+| Personal | `GOOGLE_CALENDAR_ID` | Everything else |
+
+Any category left empty stays on `GOOGLE_CALENDAR_ID`, so nothing changes until
+the extra calendars are set. Create them in the same Google account as the
+main calendar (LifeOS's sign-in can add and move events but cannot create
+calendars), share them like the main one, paste each calendar's ID from its
+Google Calendar settings into the environment file and restart. New events are
+sorted as they arrive: the extractor and the agent choose a category, with
+title keyword rules as a fallback. Shifts move to the work calendar on the next
+Patchwork sync. To sort what is already on the main calendar:
+
+```bash
+python manage.py sort_calendar_events            # trial run: prints the plan, changes nothing
+python manage.py sort_calendar_events --apply    # moves the events
+```
+
+Events are moved, not copied, so they keep their IDs and LifeOS keeps track of
+them. Titles the keyword rules cannot place are sorted by the OpenAI model
+(`--no-ai` leaves them personal instead), and `--set EVENT_ID=family` corrects
+a single event. Pick each calendar's colour on each phone in the Calendar app
+(Calendars, then the info button next to the calendar).
+
 ### Patchwork work-shift sync
 
 Set `PATCHWORK_CALENDAR_URL` (the private `.ics` subscription URL) in the
 same deployment environment file as `GOOGLE_CALENDAR_ID`. The
-`sync_patchwork_calendar` command mirrors the source feed into that shared
-Google calendar twice daily (07:00 and 19:00 Europe/London) when the included
+`sync_patchwork_calendar` command mirrors the source feed into the work
+calendar (`GOOGLE_CALENDAR_ID_WORK`, or `GOOGLE_CALENDAR_ID` when that is
+empty) twice daily (07:00 and 19:00 Europe/London) when the included
 `lifeassistant-patchwork-calendar.timer` is installed. Mirrored entries keep
 their Patchwork label, prefixed with **Ike —** (for example, **Ike — Standard
 Day — General Medicine** or **Ike — Annual leave**). Redundant work segments

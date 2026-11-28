@@ -29,6 +29,15 @@ class AssignedTo(models.TextChoices):
     UNASSIGNED = "unassigned", "Unassigned"
 
 
+class CalendarCategory(models.TextChoices):
+    """Which Google calendar an event goes on (assistant/services/calendar_categories.py)."""
+
+    WORK = "work", "Work"
+    FAMILY = "family", "Family"
+    HEALTH = "health", "Health"
+    PERSONAL = "personal", "Personal"
+
+
 class RecipientTarget(models.TextChoices):
     """Who a Reminder email goes to. Resolved only via AUTHORISED_EMAIL_IKE /
     AUTHORISED_EMAIL_WIFE — never an address extracted from email text."""
@@ -161,6 +170,12 @@ class ParsedAction(models.Model):
     recurrence_days_of_week = models.JSONField(default=list, blank=True)
     recurrence_until = models.DateField(null=True, blank=True)
     recurrence_count = models.PositiveIntegerField(null=True, blank=True)
+
+    # Which calendar (and so which colour) the event goes on. Empty means
+    # "not chosen": the keyword rules decide, else personal.
+    calendar_category = models.CharField(
+        max_length=20, choices=CalendarCategory.choices, blank=True, default=""
+    )
 
     # Phase 2: tasks
     due_date = models.DateField(null=True, blank=True)

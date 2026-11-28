@@ -82,6 +82,10 @@ def build_parsed_action_from_extraction(incoming_email, extraction) -> ParsedAct
         recurrence_days_of_week=list(extraction.recurrence_days_of_week or []),
         recurrence_until=recurrence_until,
         recurrence_count=extraction.recurrence_count,
+        calendar_category=(
+            extraction.calendar_category or ""
+            if extraction.action_type == ParsedAction.ActionType.CREATE_CALENDAR_EVENT else ""
+        ),
         due_date=due_date,
         due_time=due_time,
         assigned_to=extraction.assigned_to or "",

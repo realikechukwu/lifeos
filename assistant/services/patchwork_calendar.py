@@ -21,6 +21,7 @@ from googleapiclient.discovery import build
 
 from core.models import PatchworkShift
 
+from .calendar_categories import WORK, calendar_id_for
 from .gmail import get_google_credentials
 
 
@@ -352,6 +353,24 @@ def _delete_google_event(service, record: PatchworkShift) -> None:
             raise
 
 
+def _move_google_event(service, record: PatchworkShift, destination: str) -> dict | None:
+    """Move a mirrored shift to another calendar, keeping its event ID.
+
+    Returns the moved event, or None when the old copy no longer exists (the
+    caller then recreates it on the destination calendar as usual)."""
+    try:
+        moved = service.events().move(
+            calendarId=record.calendar_id, eventId=record.google_event_id, destination=destination
+        ).execute(num_retries=GOOGLE_API_RETRIES)
+    except Exception as exc:
+        if not _is_google_not_found(exc):
+            raise
+        return None
+    record.calendar_id = destination
+    record.save(update_fields=["calendar_id", "updated_at"])
+    return moved
+
+
 def _update_record_from_shift(
     record: PatchworkShift, shift: PatchworkShiftData, *, now: datetime, active: bool, suppressed: bool
 ) -> None:
@@ -368,15 +387,15 @@ def _update_record_from_shift(
 
 
 def sync_patchwork_calendar(*, fetcher=fetch_patchwork_calendar, calendar_service=None, now=None) -> SyncResult:
-    """Mirror the current Patchwork feed into the configured shared calendar.
+    """Mirror the current Patchwork feed into the work calendar.
 
     Reconcile both the source feed and live Google copies. Missing/cancelled
     mirrors are recreated even when Patchwork's UID and payload are unchanged.
+    A mirror still on a previous calendar is moved, never copied, so changing
+    the work calendar cannot leave duplicate shifts behind.
     Google rate limits and transient failures receive bounded backoff retries.
     """
-    calendar_id = settings.GOOGLE_CALENDAR_ID
-    if not calendar_id:
-        raise RuntimeError("GOOGLE_CALENDAR_ID is not configured.")
+    calendar_id = calendar_id_for(WORK)
 
     shifts = parse_patchwork_calendar(fetcher())
     service = calendar_service or build(
@@ -444,6 +463,11 @@ def sync_patchwork_calendar(*, fetcher=fetch_patchwork_calendar, calendar_servic
             )
             created += 1
             continue
+
+        if record.active and record.google_event_id and record.calendar_id and record.calendar_id != calendar_id:
+            moved = _move_google_event(service, record, calendar_id)
+            if moved is not None and moved.get("status") != "cancelled":
+                google_events[record.google_event_id] = moved
 
         google_event = google_events.get(record.google_event_id) if record.calendar_id == calendar_id else None
         needs_update = (
